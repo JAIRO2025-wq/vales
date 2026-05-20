@@ -1,0 +1,1 @@
+// Función eliminada por solicitud del usuario.
