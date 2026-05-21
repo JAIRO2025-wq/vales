@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { Suspense, useState, useEffect } from "react";
@@ -8,9 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SignatureCanvas } from "@/components/firma/SignatureCanvas";
-import { CONFIG, ADMIN_PIN } from "@/lib/config";
+import { CONFIG } from "@/lib/config";
 import { useToast } from "@/hooks/use-toast";
 import { saveVoucherAction, checkVoucherStatusAction } from "@/app/actions/vouchers";
+import { verifyPinAction } from "@/app/actions/config";
 import { 
   Lock, 
   FileSignature, 
@@ -29,6 +29,7 @@ function FirmaContent() {
   const { toast } = useToast();
   
   const [isLoading, setIsLoading] = useState(true);
+  const [isVerifyingPin, setIsVerifyingPin] = useState(false);
   const [alreadySigned, setAlreadySigned] = useState(false);
   const [pin, setPin] = useState("");
   const [isPinCorrect, setIsPinCorrect] = useState(false);
@@ -63,28 +64,30 @@ function FirmaContent() {
     verifyStatus();
   }, [voucherData.id, voucherData.fecha]);
 
-  const handlePinSubmit = (e: React.FormEvent) => {
+  const handlePinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pin === ADMIN_PIN) {
-      setIsPinCorrect(true);
-      setAuthorizedUser({ name: "ADMINISTRADOR", role: "ADMIN" });
-      return;
-    }
-    const employeeEntry = Object.entries(CONFIG.PINES).find(([_, data]) => data.pin === pin);
-    if (employeeEntry) {
-      const [name, data] = employeeEntry;
-      const isGlobalRole = data.role === "ADMIN" || data.role === "JEFE";
-      const isCorrectBranch = data.branch === voucherData.sucursal;
-      if (!isGlobalRole && !isCorrectBranch) {
-        toast({ variant: "destructive", title: "Acceso Denegado", description: `Usted está asignado a ${data.branch || 'otra sede'}.` });
+    if (!pin || pin.length < 4) return;
+
+    setIsVerifyingPin(true);
+    try {
+      const result = await verifyPinAction(pin, voucherData.sucursal);
+      
+      if (result.success && result.user) {
+        setIsPinCorrect(true);
+        setAuthorizedUser(result.user);
+        toast({ title: "PIN Verificado", description: `Bienvenido(a) ${result.user.name}` });
+      } else {
+        toast({ 
+          variant: "destructive", 
+          title: "PIN Inválido", 
+          description: result.error || "El código ingresado no es correcto." 
+        });
         setPin("");
-        return;
       }
-      setIsPinCorrect(true);
-      setAuthorizedUser({ name, role: data.role });
-    } else {
-      toast({ variant: "destructive", title: "PIN Inválido", description: "El código ingresado no existe." });
-      setPin("");
+    } catch (err) {
+      toast({ variant: "destructive", title: "Error", description: "No se pudo conectar con el servidor." });
+    } finally {
+      setIsVerifyingPin(false);
     }
   };
 
@@ -99,23 +102,31 @@ function FirmaContent() {
         timestamp: new Date().toISOString(),
         autorizadoPor: authorizedUser?.name
       });
-      await fetch(CONFIG.API_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fila: voucherData.fila,
-          sheet: voucherData.sheet,
-          id: voucherData.id,
-          firma: signatureBase64 || "",
-          motivo: skipMotivo || "",
-          autorizadoPor: authorizedUser?.name
-        }),
-      });
+      
+      // Intentar notificar a Google Sheets
+      try {
+        await fetch(CONFIG.API_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fila: voucherData.fila,
+            sheet: voucherData.sheet,
+            id: voucherData.id,
+            firma: signatureBase64 || "",
+            motivo: skipMotivo || "",
+            autorizadoPor: authorizedUser?.name,
+            metodo: "updateFirma"
+          }),
+        });
+      } catch (e) {
+        console.warn("Google Sheets no respondió, pero el vale se guardó localmente.");
+      }
+
       setIsSuccess(true);
     } catch (error) {
       console.error("Error al sincronizar:", error);
-      toast({ variant: "destructive", title: "Error de red", description: "Fallo al conectar con Google Sheets." });
+      toast({ variant: "destructive", title: "Error al guardar", description: "No se pudo procesar la firma." });
     } finally {
       setIsSubmitting(false);
     }
@@ -182,13 +193,25 @@ function FirmaContent() {
                   <Lock className="w-4 h-4 text-primary" />
                   <label className="text-sm font-bold text-muted-foreground uppercase">PIN DE ENCARGADO</label>
                 </div>
-                <Input type="password" inputMode="numeric" maxLength={4} placeholder="****" className="text-center text-4xl h-20 font-bold tracking-widest border-2 focus:border-primary" value={pin} onChange={(e) => setPin(e.target.value)} autoFocus />
+                <Input 
+                  type="password" 
+                  inputMode="numeric" 
+                  maxLength={4} 
+                  placeholder="****" 
+                  className="text-center text-4xl h-20 font-bold tracking-widest border-2 focus:border-primary" 
+                  value={pin} 
+                  onChange={(e) => setPin(e.target.value)} 
+                  autoFocus 
+                  disabled={isVerifyingPin}
+                />
                 <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-lg border border-amber-100 mt-2">
                   <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
-                  <p className="text-[10px] text-amber-800 font-medium">Solo personal autorizado de esta sede puede firmar o autorizar este desembolso.</p>
+                  <p className="text-[10px] text-amber-800 font-medium">Solo personal autorizado de esta sede ({voucherData.sucursal}) puede firmar este desembolso.</p>
                 </div>
               </div>
-              <Button type="submit" className="w-full h-14 text-lg font-bold shadow-lg">Verificar PIN</Button>
+              <Button type="submit" className="w-full h-14 text-lg font-bold shadow-lg" disabled={isVerifyingPin || pin.length < 4}>
+                {isVerifyingPin ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : "Verificar PIN"}
+              </Button>
             </form>
           ) : (
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
