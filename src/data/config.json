@@ -1,21 +1,25 @@
 {
   "API_URL": "https://script.google.com/macros/s/AKfycbxIE_XohaGwm6rMEHIoNIzj93WBB2Zd0kkgaJ-QDWU7Ina8p5-hTNcTI3iNxZ8qlTO4eg/exec",
   "PINES": {
-    "VICENTE": { "pin": "4444", "role": "JEFE" },
-    "JAIRO": { "pin": "1111", "role": "CAJERA" },
-    "MARIA": { "pin": "2222", "role": "SOLICITANTE" }
+    "MENDIOLA": {
+      "pin": "7777",
+      "role": "CAJERA",
+      "branch": "SAN MIGUEL"
+    }
   },
   "EMPRESA": "FLYNET S.A. de C.V.",
   "LOGO_URL": "/logo.svg",
   "SUCURSALES": [
     "SAN MIGUEL",
     "USULUTAN",
-    "LA UNION"
+    "LA UNION",
+    "MORAZAN"
   ],
   "TIPOS_CAJA": [
     "Caja chica",
     "Clientes",
     "Instalaciones",
     "Otros Gastos"
-  ]
+  ],
+  "PDF_API_URL": "https://vales001.modulos.uk"
 }

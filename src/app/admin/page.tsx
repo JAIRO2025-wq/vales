@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -32,13 +32,13 @@ import {
 function AdminContent() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
+  const router = useRouter();
   
   const [cycles] = useState<CycleInfo[]>(getRecentCycles());
   const [selectedCycle, setSelectedCycle] = useState<string>(cycles[0].id);
   const [vales, setVales] = useState<FormattedVoucher[]>([]);
   const [loading, setLoading] = useState(true);
   const [isBatchExporting, setIsBatchExporting] = useState<string | null>(null);
-  const [previewVale, setPreviewVale] = useState<FormattedVoucher | null>(null);
   const [mounted, setMounted] = useState(false);
 
   // Filtros
@@ -50,7 +50,7 @@ function AdminContent() {
     setMounted(true);
   }, []);
 
-  // Sincronizar filtros con URL (Sidebar)
+  // Sincronizar filtros con URL (Sidebar y persistencia)
   useEffect(() => {
     if (mounted) {
       const s = searchParams.get("sucursal");
@@ -80,6 +80,23 @@ function AdminContent() {
       loadData();
     }
   }, [selectedCycle, mounted]);
+
+  const handleViewVale = (vale: FormattedVoucher) => {
+    const params = new URLSearchParams();
+    params.set("fila", vale.raw.fila || "");
+    params.set("sheet", vale.raw.sheet || "");
+    params.set("id", vale.id);
+    params.set("numVale", vale.raw.numVale || "");
+    params.set("entregado", vale.raw.entregado || "");
+    params.set("monto", vale.raw.monto || "");
+    params.set("sucursal", vale.raw.sucursal || "");
+    params.set("fecha", vale.raw.fecha || "");
+    params.set("rubro", vale.raw.rubro || "");
+    if (vale.raw.concepto) params.set("concepto", vale.raw.concepto);
+    
+    // Abrir en nueva pestaña para no perder el estado actual del panel
+    window.open(`/vale?${params.toString()}`, '_blank');
+  };
 
   const getPayload = (voucher: any) => {
     const sheetUpper = (voucher.sheet || "").toUpperCase();
@@ -112,7 +129,9 @@ function AdminContent() {
   const exportSinglePDF = async (voucherRaw: any) => {
     try {
       const payload = getPayload(voucherRaw);
-      const response = await fetch(`${CONFIG.PDF_API_URL}/generate-vale`, {
+      const baseApi = CONFIG.PDF_API_URL.replace(/\/$/, "");
+      
+      const response = await fetch(`${baseApi}/generate-vale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -145,8 +164,9 @@ function AdminContent() {
 
     try {
       const payloads = targets.map(v => getPayload(v.raw));
+      const baseApi = CONFIG.PDF_API_URL.replace(/\/$/, "");
       
-      const response = await fetch(`${CONFIG.PDF_API_URL}/generate-vale-bulk`, {
+      const response = await fetch(`${baseApi}/generate-vale-bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payloads)
@@ -384,7 +404,7 @@ function AdminContent() {
                     <TableRow 
                       key={vale.id} 
                       className="hover:bg-muted/10 cursor-pointer"
-                      onClick={() => setPreviewVale(vale)}
+                      onClick={() => handleViewVale(vale)}
                     >
                       <TableCell className="text-[10px] font-mono">{vale.raw.fecha}</TableCell>
                       <TableCell className="font-black text-primary">
@@ -419,7 +439,7 @@ function AdminContent() {
                             variant="ghost" 
                             size="icon" 
                             className="h-8 w-8 text-primary"
-                            onClick={() => setPreviewVale(vale)}
+                            onClick={() => handleViewVale(vale)}
                           >
                             <Eye className="w-4 h-4" />
                           </Button>

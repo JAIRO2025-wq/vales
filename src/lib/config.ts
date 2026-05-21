@@ -5,7 +5,7 @@ export type UserRole = 'CAJERA' | 'SOLICITANTE' | 'JEFE' | 'ADMIN';
 export interface UserPin {
   pin: string;
   role: UserRole;
-  branch?: string; // Sucursal asignada (opcional para roles globales)
+  branch?: string; 
 }
 
 export interface AppConfig {
@@ -19,8 +19,7 @@ export interface AppConfig {
 }
 
 /**
- * En el servidor, podemos importar esto directamente.
- * Para el cliente, es mejor pasarlo como props si queremos reactividad tras un router.refresh()
+ * CONFIG base (estática para el cliente inicial)
  */
 export const CONFIG: AppConfig = configData as unknown as AppConfig;
 

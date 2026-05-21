@@ -39,6 +39,17 @@ interface AdminSidebarProps {
 
 export function AdminSidebar({ config }: AdminSidebarProps) {
   const pathname = usePathname();
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Para evitar errores de hidratación con componentes de Radix que generan IDs dinámicos
+  // (como Collapsible), esperamos a que el componente esté montado en el cliente.
+  if (!mounted) {
+    return null;
+  }
 
   return (
     <Sidebar variant="sidebar" collapsible="icon">

@@ -6,19 +6,23 @@ import { revalidatePath } from 'next/cache';
 import { type AppConfig } from '@/lib/config';
 
 /**
- * Guarda la configuración en src/data/config.ts como un módulo exportable.
- * Esto evita errores de Turbopack HMR con archivos JSON y permite persistencia en el repo.
+ * Guarda la configuración en src/data/config.json.
+ * Se utiliza una ruta absoluta para asegurar la persistencia en el directorio de datos.
  */
 export async function updateConfigAction(newConfig: AppConfig) {
   try {
-    const filePath = path.join(process.cwd(), 'src/data/config.ts');
+    const filePath = path.join(process.cwd(), 'src/data/config.json');
     
-    // Generar el contenido del archivo TS
-    const content = `export const configData = ${JSON.stringify(newConfig, null, 2)};\n`;
+    // Guardar como JSON puro para lectura fácil por FS
+    await fs.writeFile(filePath, JSON.stringify(newConfig, null, 2), 'utf-8');
     
-    await fs.writeFile(filePath, content, 'utf-8');
+    // También actualizamos el archivo .ts para que los imports estáticos tengan una base,
+    // aunque el sistema ahora priorizará la lectura dinámica.
+    const tsFilePath = path.join(process.cwd(), 'src/data/config.ts');
+    const tsContent = `export const configData = ${JSON.stringify(newConfig, null, 2)};\n`;
+    await fs.writeFile(tsFilePath, tsContent, 'utf-8');
     
-    // Invalidar todas las rutas para refrescar los datos
+    // Forzar revalidación de todas las rutas
     revalidatePath('/', 'layout');
     
     return { success: true };

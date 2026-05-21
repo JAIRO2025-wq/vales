@@ -4,7 +4,7 @@ import React, { Suspense, useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { VoucherCard } from "@/components/vale/VoucherCard";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { 
   Printer, 
   ShieldCheck, 
@@ -13,7 +13,8 @@ import {
   Download, 
   QrCode, 
   Camera,
-  Signature
+  Signature,
+  Copy
 } from "lucide-react";
 import { checkVoucherStatusAction, savePdfAction, saveVoucherAction, type VoucherRecord } from "@/app/actions/vouchers";
 import { useToast } from "@/hooks/use-toast";
@@ -51,7 +52,6 @@ function ValeContent() {
         if (status) {
           setVoucherStatus(status);
         } else {
-          // Si no existe, lo creamos como pendiente
           await saveVoucherAction({
             ...voucherData,
             firmado: false,
@@ -69,7 +69,6 @@ function ValeContent() {
     
     initVoucher();
     
-    // Polling para actualizar firma/comprobante si se hace desde otro dispositivo
     const interval = setInterval(async () => {
       if (!voucherData.id) return;
       const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
@@ -111,14 +110,15 @@ function ValeContent() {
     setIsSavingPdf(true);
     try {
       const payload = preparePayload();
-      const response = await fetch(`${CONFIG.PDF_API_URL}/generate-vale`, {
+      // Normalizar URL de la API para evitar doble //
+      const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+      
+      const response = await fetch(`${baseApi}/generate-vale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
       if (!response.ok) throw new Error("Error en el servidor de PDF");
-      
       const data = await response.json();
       if (data.pdf_url) {
         window.open(data.pdf_url, '_blank');
@@ -136,26 +136,25 @@ function ValeContent() {
     setIsSyncing(true);
     try {
       const payload = preparePayload();
-      const response = await fetch(`${CONFIG.PDF_API_URL}/generate-vale`, {
+      // Normalizar URL de la API para evitar doble //
+      const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+      
+      const response = await fetch(`${baseApi}/generate-vale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
       if (!response.ok) throw new Error("Error al generar PDF");
       const data = await response.json();
       if (!data.pdf_url) throw new Error("URL de PDF no recibida");
 
       const pdfResponse = await fetch(data.pdf_url);
       const pdfBlob = await pdfResponse.blob();
-
       const reader = new FileReader();
       reader.readAsDataURL(pdfBlob);
       reader.onloadend = async () => {
         const base64data = reader.result as string;
         await savePdfAction(voucherData.id, voucherData.fecha, voucherData.numVale, base64data);
-
-        // Notificar a Google que el PDF ya está listo
         await fetch(CONFIG.API_URL, {
           method: "POST",
           mode: "no-cors",
@@ -168,7 +167,6 @@ function ValeContent() {
             metodo: "updatePdf"
           }),
         });
-
         toast({ title: "Completado", description: "Documento archivado con éxito." });
         setVoucherStatus(prev => prev ? { ...prev, hasPdf: true } : null);
       };
@@ -191,17 +189,25 @@ function ValeContent() {
 
   const isSigned = voucherStatus && (voucherStatus.firmado || !!voucherStatus.motivoOmitido);
   const hasReceipt = !!voucherStatus?.comprobanteUrl;
-  
-  // Generar URLs para los QR
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
   const queryParams = new URLSearchParams(voucherData as any).toString();
   const signUrl = `${baseUrl}/firmar?${queryParams}`;
   const attachUrl = `${baseUrl}/adjuntar?${queryParams}`;
 
+  const handleCopySignLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(signUrl);
+    toast({ title: "Link de Firma", description: "Copiado al portapapeles." });
+  };
+
+  const handleCopyAttachLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(attachUrl);
+    toast({ title: "Link de Comprobante", description: "Copiado al portapapeles." });
+  };
+
   return (
     <div className="min-h-screen bg-zinc-100 p-4 md:p-10 flex flex-col items-center gap-6 print:bg-white print:p-0">
-      
-      {/* Modal de éxito al firmar */}
       {isSigned && !hasDismissedModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 print:hidden">
           <Card className="w-full max-w-sm shadow-2xl border-none animate-in zoom-in duration-300">
@@ -219,43 +225,25 @@ function ValeContent() {
         </div>
       )}
 
-      {/* Toolbar Superior */}
       <div className="flex flex-wrap gap-3 justify-center print:hidden bg-white p-3 rounded-2xl shadow-xl border border-zinc-200 sticky top-4 z-40">
-        <Button 
-          onClick={handleDownloadPDF} 
-          disabled={isSavingPdf}
-          variant="outline"
-          className="h-11 px-5 border-zinc-300 font-bold text-sm shadow-sm"
-        >
+        <Button onClick={handleDownloadPDF} disabled={isSavingPdf} variant="outline" className="h-11 px-5 border-zinc-300 font-bold text-sm shadow-sm">
           {isSavingPdf ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2 text-indigo-600" />}
           PDF Profesional
         </Button>
-
-        <Button 
-          variant="outline" 
-          onClick={() => window.print()}
-          className="h-11 px-5 border-zinc-300 font-bold text-sm"
-        >
+        <Button variant="outline" onClick={() => window.print()} className="h-11 px-5 border-zinc-300 font-bold text-sm">
           <Printer className="w-4 h-4 mr-2 text-emerald-600" />
           Imprimir
         </Button>
-
         {isSigned && !voucherStatus?.hasPdf && (
-           <Button 
-           onClick={handleArchiveVoucher}
-           disabled={isSyncing}
-           className="h-11 px-5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg"
-         >
+           <Button onClick={handleArchiveVoucher} disabled={isSyncing} className="h-11 px-5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg">
            {isSyncing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />}
            Finalizar y Archivar
          </Button>
         )}
       </div>
 
-      {/* Sección de Escaneo para firma y comprobante */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-[850px] print:hidden">
-        {/* QR de Firma */}
-        <Card className="border-2 border-dashed border-zinc-300 bg-white/50">
+        <Card className="border-2 border-dashed border-zinc-300 bg-white/50 cursor-pointer hover:bg-white transition-colors" onClick={handleCopySignLink}>
           <CardContent className="p-6 flex flex-col items-center text-center gap-4">
             <div className="flex items-center gap-2 text-zinc-600 font-bold uppercase text-xs">
               <Signature className="w-4 h-4" /> 1. Firma del Recibido
@@ -268,22 +256,15 @@ function ValeContent() {
             ) : (
               <>
                 <div className="bg-white p-2 rounded-lg border shadow-inner">
-                  <img 
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(signUrl)}`}
-                    alt="QR Firma"
-                    className="w-32 h-32"
-                  />
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(signUrl)}`} alt="QR Firma" className="w-32 h-32" />
                 </div>
-                <p className="text-[10px] text-muted-foreground leading-tight">
-                  Escanea para firmar desde tu celular.<br/>Requiere PIN de encargado.
-                </p>
+                <p className="text-[10px] text-muted-foreground leading-tight">Haz clic para copiar link de firma o escanea QR.</p>
               </>
             )}
           </CardContent>
         </Card>
 
-        {/* QR de Comprobante */}
-        <Card className="border-2 border-dashed border-zinc-300 bg-white/50">
+        <Card className="border-2 border-dashed border-zinc-300 bg-white/50 cursor-pointer hover:bg-white transition-colors" onClick={handleCopyAttachLink}>
           <CardContent className="p-6 flex flex-col items-center text-center gap-4">
             <div className="flex items-center gap-2 text-zinc-600 font-bold uppercase text-xs">
               <Camera className="w-4 h-4" /> 2. Adjuntar Ticket
@@ -296,22 +277,15 @@ function ValeContent() {
             ) : (
               <>
                 <div className="bg-white p-2 rounded-lg border shadow-inner">
-                  <img 
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(attachUrl)}`}
-                    alt="QR Adjuntar"
-                    className="w-32 h-32"
-                  />
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(attachUrl)}`} alt="QR Adjuntar" className="w-32 h-32" />
                 </div>
-                <p className="text-[10px] text-muted-foreground leading-tight">
-                  Escanea para tomar foto del comprobante.<br/>Sincronización automática.
-                </p>
+                <p className="text-[10px] text-muted-foreground leading-tight">Haz clic para copiar link de ticket o escanea QR.</p>
               </>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Documento Visual */}
       <div className="bg-white p-1 rounded-xl shadow-2xl print:shadow-none transition-all" id="vale-imprimible">
         <VoucherCard 
           id={voucherStatus?.id || voucherData.id}
@@ -329,7 +303,6 @@ function ValeContent() {
           autorizadoPor={voucherStatus?.autorizadoPor}
         />
       </div>
-      
       <p className="text-[11px] text-muted-foreground font-bold uppercase tracking-widest pb-10 print:hidden flex items-center gap-2">
         <QrCode className="w-3 h-3" /> Control de Flujo Digital v5.0 • Flynet
       </p>

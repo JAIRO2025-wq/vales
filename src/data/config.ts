@@ -1,8 +1,7 @@
 export const configData = {
   "API_URL": "https://script.google.com/macros/s/AKfycbxIE_XohaGwm6rMEHIoNIzj93WBB2Zd0kkgaJ-QDWU7Ina8p5-hTNcTI3iNxZ8qlTO4eg/exec",
-  "PDF_API_URL": "http://localhost:8000",
   "PINES": {
-    "STEFANY YAMILETH MENDIOLA RIVAS": {
+    "MENDIOLA": {
       "pin": "7777",
       "role": "CAJERA",
       "branch": "SAN MIGUEL"
@@ -13,13 +12,14 @@ export const configData = {
   "SUCURSALES": [
     "SAN MIGUEL",
     "USULUTAN",
-    "SAL VICENTE",
-    "SAN SEBASTIAN"
+    "LA UNION",
+    "MORAZAN"
   ],
   "TIPOS_CAJA": [
     "Caja chica",
     "Clientes",
     "Instalaciones",
     "Otros Gastos"
-  ]
+  ],
+  "PDF_API_URL": "https://vales001.modulos.uk"
 };

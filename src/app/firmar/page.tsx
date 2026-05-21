@@ -1,6 +1,7 @@
+
 "use client";
 
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SignatureCanvas } from "@/components/firma/SignatureCanvas";
 import { CONFIG, ADMIN_PIN } from "@/lib/config";
 import { useToast } from "@/hooks/use-toast";
-import { saveVoucherAction } from "@/app/actions/vouchers";
+import { saveVoucherAction, checkVoucherStatusAction } from "@/app/actions/vouchers";
 import { 
   Lock, 
   FileSignature, 
@@ -19,13 +20,16 @@ import {
   XCircle, 
   MessageSquare,
   UserCheck,
-  ShieldAlert
+  ShieldAlert,
+  ShieldX
 } from "lucide-react";
 
 function FirmaContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
   
+  const [isLoading, setIsLoading] = useState(true);
+  const [alreadySigned, setAlreadySigned] = useState(false);
   const [pin, setPin] = useState("");
   const [isPinCorrect, setIsPinCorrect] = useState(false);
   const [authorizedUser, setAuthorizedUser] = useState<{name: string, role: string} | null>(null);
@@ -47,44 +51,35 @@ function FirmaContent() {
     fecha: searchParams.get("fecha") || "",
   };
 
+  useEffect(() => {
+    const verifyStatus = async () => {
+      if (!voucherData.id) return;
+      const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
+      if (status && (status.firmado || !!status.motivoOmitido)) {
+        setAlreadySigned(true);
+      }
+      setIsLoading(false);
+    };
+    verifyStatus();
+  }, [voucherData.id, voucherData.fecha]);
+
   const handlePinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // 1. Verificar PIN Maestro
     if (pin === ADMIN_PIN) {
       setIsPinCorrect(true);
       setAuthorizedUser({ name: "ADMINISTRADOR", role: "ADMIN" });
       return;
     }
-
-    // 2. Buscar empleado por PIN
     const employeeEntry = Object.entries(CONFIG.PINES).find(([_, data]) => data.pin === pin);
-    
     if (employeeEntry) {
       const [name, data] = employeeEntry;
-      
-      // Validación de sucursal
-      // Los roles ADMIN y JEFE son globales. CAJERA y SOLICITANTE deben coincidir con la sede.
       const isGlobalRole = data.role === "ADMIN" || data.role === "JEFE";
       const isCorrectBranch = data.branch === voucherData.sucursal;
-
       if (!isGlobalRole && !isCorrectBranch) {
-        toast({ 
-          variant: "destructive", 
-          title: "Acceso Denegado", 
-          description: `Usted está asignado a ${data.branch || 'otra sede'}. Este vale es de ${voucherData.sucursal}.` 
-        });
+        toast({ variant: "destructive", title: "Acceso Denegado", description: `Usted está asignado a ${data.branch || 'otra sede'}.` });
         setPin("");
         return;
       }
-
-      // Si es omisión de firma, solo permitimos CAJERA, JEFE o ADMIN
-      if (showSkipForm && data.role !== "CAJERA" && data.role !== "JEFE" && data.role !== "ADMIN") {
-        toast({ variant: "destructive", title: "Permisos insuficientes", description: "Solo encargados de caja o gerencia autorizan omisiones." });
-        setPin("");
-        return;
-      }
-
       setIsPinCorrect(true);
       setAuthorizedUser({ name, role: data.role });
     } else {
@@ -104,7 +99,6 @@ function FirmaContent() {
         timestamp: new Date().toISOString(),
         autorizadoPor: authorizedUser?.name
       });
-
       await fetch(CONFIG.API_URL, {
         method: "POST",
         mode: "no-cors",
@@ -118,7 +112,6 @@ function FirmaContent() {
           autorizadoPor: authorizedUser?.name
         }),
       });
-      
       setIsSuccess(true);
     } catch (error) {
       console.error("Error al sincronizar:", error);
@@ -128,10 +121,29 @@ function FirmaContent() {
     }
   };
 
+  if (isLoading) {
+    return <div className="min-h-screen flex items-center justify-center font-headline text-primary">Verificando estado...</div>;
+  }
+
+  if (alreadySigned) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="w-full max-w-md text-center py-10 shadow-2xl border-amber-200">
+          <CardContent className="space-y-6">
+            <ShieldX className="w-16 h-16 text-amber-500 mx-auto" />
+            <h2 className="text-2xl font-bold font-headline text-amber-900">Vale ya firmado</h2>
+            <p className="text-muted-foreground text-sm">Este documento ya cuenta con una firma registrada y no puede ser modificado.</p>
+            <Button className="w-full h-12" variant="outline" onClick={() => window.close()}>Cerrar</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (isSuccess) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-background">
-        <Card className="w-full max-w-md text-center py-10 shadow-2xl animate-in zoom-in duration-300">
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="w-full max-w-md text-center py-10 shadow-2xl">
           <CardContent className="space-y-6">
             <CheckCircle2 className="w-16 h-16 text-green-600 mx-auto" />
             <h2 className="text-3xl font-bold font-headline text-primary">¡Procesado!</h2>
@@ -168,20 +180,9 @@ function FirmaContent() {
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Lock className="w-4 h-4 text-primary" />
-                  <label className="text-sm font-bold text-muted-foreground uppercase">
-                    PIN DE ENCARGADO ({voucherData.sucursal})
-                  </label>
+                  <label className="text-sm font-bold text-muted-foreground uppercase">PIN DE ENCARGADO</label>
                 </div>
-                <Input
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={4}
-                  placeholder="****"
-                  className="text-center text-4xl h-20 font-bold tracking-widest border-2 focus:border-primary"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  autoFocus
-                />
+                <Input type="password" inputMode="numeric" maxLength={4} placeholder="****" className="text-center text-4xl h-20 font-bold tracking-widest border-2 focus:border-primary" value={pin} onChange={(e) => setPin(e.target.value)} autoFocus />
                 <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-lg border border-amber-100 mt-2">
                   <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
                   <p className="text-[10px] text-amber-800 font-medium">Solo personal autorizado de esta sede puede firmar o autorizar este desembolso.</p>
@@ -194,15 +195,8 @@ function FirmaContent() {
               {!showSkipForm ? (
                 <>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-bold text-muted-foreground uppercase flex items-center gap-2">
-                      <FileSignature className="w-4 h-4" /> Firma Digital
-                    </span>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="text-xs text-muted-foreground hover:text-destructive h-8"
-                      onClick={() => setShowSkipForm(true)}
-                    >
+                    <span className="text-sm font-bold text-muted-foreground uppercase flex items-center gap-2"><FileSignature className="w-4 h-4" /> Firma Digital</span>
+                    <Button variant="ghost" size="sm" className="text-xs text-muted-foreground hover:text-destructive h-8" onClick={() => setShowSkipForm(true)}>
                       <XCircle className="w-3 h-3 mr-1" /> Omitir Firma
                     </Button>
                   </div>
@@ -210,23 +204,13 @@ function FirmaContent() {
                 </>
               ) : (
                 <div className="space-y-4 border-2 border-dashed border-destructive/30 p-4 rounded-xl bg-destructive/5">
-                  <h3 className="text-destructive font-bold flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4" /> Justificación de Omisión
-                  </h3>
+                  <h3 className="text-destructive font-bold flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Justificación de Omisión</h3>
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1">
-                      <MessageSquare className="w-3 h-3" /> Motivo del registro sin firma
-                    </label>
-                    <Textarea 
-                      placeholder="Ej: Autorización por WhatsApp / Emergencia en campo..."
-                      className="min-h-[100px] border-destructive/20 focus-visible:ring-destructive"
-                      value={motivo}
-                      onChange={(e) => setMotivo(e.target.value)}
-                    />
+                    <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Motivo</label>
+                    <Textarea placeholder="Ej: Autorización por WhatsApp..." className="min-h-[100px] border-destructive/20" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
                   </div>
                   <Button variant="destructive" className="w-full h-12 font-bold" disabled={!motivo.trim() || isSubmitting} onClick={() => handleAction(undefined, motivo)}>
-                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                    Confirmar Autorización
+                    {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Confirmar Autorización
                   </Button>
                 </div>
               )}
