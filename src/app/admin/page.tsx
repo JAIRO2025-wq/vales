@@ -41,7 +41,6 @@ function AdminContent() {
   const [isBatchExporting, setIsBatchExporting] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  // Filtros
   const [filterSucursal, setFilterSucursal] = useState("TODAS");
   const [filterCaja, setFilterCaja] = useState("TODAS");
   const [filterSearch, setFilterSearch] = useState("");
@@ -50,7 +49,6 @@ function AdminContent() {
     setMounted(true);
   }, []);
 
-  // Sincronizar filtros con URL (Sidebar y persistencia)
   useEffect(() => {
     if (mounted) {
       const s = searchParams.get("sucursal");
@@ -94,7 +92,6 @@ function AdminContent() {
     params.set("rubro", vale.raw.rubro || "");
     if (vale.raw.concepto) params.set("concepto", vale.raw.concepto);
     
-    // Abrir en nueva pestaña para no perder el estado actual del panel
     window.open(`/vale?${params.toString()}`, '_blank');
   };
 
@@ -243,7 +240,6 @@ function AdminContent() {
         </div>
       </header>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="border-l-4 border-l-primary shadow-sm bg-white">
           <CardContent className="pt-6">
@@ -291,7 +287,6 @@ function AdminContent() {
         </Card>
       </div>
 
-      {/* Batch Actions */}
       <Card className="bg-muted/30 border-dashed border-2">
         <CardHeader className="py-4">
           <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -349,6 +344,8 @@ function AdminContent() {
             <div className="relative min-w-[200px] flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input 
+                id="search-input-admin"
+                name="search"
                 placeholder="Buscar por nombre, rubro o N°..." 
                 className="pl-9 h-10 border-2"
                 value={filterSearch}

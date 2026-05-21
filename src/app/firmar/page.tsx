@@ -103,7 +103,6 @@ function FirmaContent() {
         autorizadoPor: authorizedUser?.name
       });
       
-      // Intentar notificar a Google Sheets
       try {
         await fetch(CONFIG.API_URL, {
           method: "POST",
@@ -191,12 +190,15 @@ function FirmaContent() {
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Lock className="w-4 h-4 text-primary" />
-                  <label className="text-sm font-bold text-muted-foreground uppercase">PIN DE ENCARGADO</label>
+                  <label htmlFor="pin-auth-input" className="text-sm font-bold text-muted-foreground uppercase">PIN DE ENCARGADO</label>
                 </div>
                 <Input 
+                  id="pin-auth-input"
+                  name="pin_code"
                   type="password" 
                   inputMode="numeric" 
                   maxLength={4} 
+                  autoComplete="one-time-code"
                   placeholder="****" 
                   className="text-center text-4xl h-20 font-bold tracking-widest border-2 focus:border-primary" 
                   value={pin} 
@@ -229,8 +231,15 @@ function FirmaContent() {
                 <div className="space-y-4 border-2 border-dashed border-destructive/30 p-4 rounded-xl bg-destructive/5">
                   <h3 className="text-destructive font-bold flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Justificación de Omisión</h3>
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Motivo</label>
-                    <Textarea placeholder="Ej: Autorización por WhatsApp..." className="min-h-[100px] border-destructive/20" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+                    <label htmlFor="motivo-omision-text" className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Motivo</label>
+                    <Textarea 
+                      id="motivo-omision-text"
+                      name="skip_reason"
+                      placeholder="Ej: Autorización por WhatsApp..." 
+                      className="min-h-[100px] border-destructive/20" 
+                      value={motivo} 
+                      onChange={(e) => setMotivo(e.target.value)} 
+                    />
                   </div>
                   <Button variant="destructive" className="w-full h-12 font-bold" disabled={!motivo.trim() || isSubmitting} onClick={() => handleAction(undefined, motivo)}>
                     {isSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Confirmar Autorización
