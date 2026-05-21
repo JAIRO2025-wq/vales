@@ -157,19 +157,19 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
     
     if (index >= 0) {
       const existing = vouchers[index];
-      const newFirmado = voucher.firmado || existing.firmado || !!existing.motivoOmitido;
-      
+      // Si el vale ya existe, actualizamos los datos básicos (monto, concepto, etc)
+      // pero preservamos los datos que el usuario ya cargó (firma, ticket, etc)
       vouchers[index] = { 
         ...existing, 
         ...voucher,
         id: targetId,
-        firmado: newFirmado,
+        firmado: voucher.firmado || existing.firmado || !!existing.motivoOmitido,
         firmaUrl: voucher.firmaUrl || existing.firmaUrl,
         comprobanteUrl: voucher.comprobanteUrl || existing.comprobanteUrl,
         motivoOmitido: voucher.motivoOmitido || existing.motivoOmitido,
-        concepto: voucher.concepto || existing.concepto,
         hasPdf: voucher.hasPdf || existing.hasPdf,
-        autorizadoPor: voucher.autorizadoPor || existing.autorizadoPor
+        autorizadoPor: voucher.autorizadoPor || existing.autorizadoPor,
+        timestamp: existing.timestamp || voucher.timestamp
       };
     } else {
       vouchers.push({

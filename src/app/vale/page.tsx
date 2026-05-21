@@ -48,20 +48,28 @@ function ValeContent() {
     const initVoucher = async () => {
       if (!voucherData.id) return;
       try {
-        const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
-        if (status) {
-          setVoucherStatus(status);
-        } else {
-          await saveVoucherAction({
-            ...voucherData,
-            firmado: false,
-            timestamp: new Date().toISOString()
-          } as any);
-          const newStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
-          if (newStatus) setVoucherStatus(newStatus);
-        }
+        // Consultamos si ya existe en disco
+        const existingStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
+        
+        // Siempre sincronizamos los datos del URL con el disco al cargar para reflejar cambios en Excel
+        // pero preservando firmas y comprobantes si ya existen.
+        await saveVoucherAction({
+          ...voucherData,
+          firmado: existingStatus?.firmado || false,
+          firmaUrl: existingStatus?.firmaUrl,
+          comprobanteUrl: existingStatus?.comprobanteUrl,
+          motivoOmitido: existingStatus?.motivoOmitido,
+          hasPdf: existingStatus?.hasPdf,
+          autorizadoPor: existingStatus?.autorizadoPor,
+          timestamp: existingStatus?.timestamp || new Date().toISOString()
+        } as any);
+
+        // Volvemos a consultar para tener el estado actualizado
+        const finalStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
+        if (finalStatus) setVoucherStatus(finalStatus);
+
       } catch (e) {
-        console.error("Error inicializando vale:", e);
+        console.error("Error inicializando o actualizando vale:", e);
       } finally {
         setIsChecking(false);
       }
@@ -69,6 +77,7 @@ function ValeContent() {
     
     initVoucher();
     
+    // Polling para actualizaciones en tiempo real (por si firman desde celular)
     const interval = setInterval(async () => {
       if (!voucherData.id) return;
       const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
@@ -76,7 +85,7 @@ function ValeContent() {
     }, 4000); 
     
     return () => clearInterval(interval);
-  }, [voucherData.id, voucherData.fecha]);
+  }, [voucherData.id, voucherData.fecha, voucherData.monto, voucherData.concepto]);
 
   const preparePayload = () => {
     const sheetUpper = (voucherData.sheet || "").toUpperCase();
@@ -110,7 +119,6 @@ function ValeContent() {
     setIsSavingPdf(true);
     try {
       const payload = preparePayload();
-      // Normalizar URL de la API para evitar doble //
       const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
       
       const response = await fetch(`${baseApi}/generate-vale`, {
@@ -136,7 +144,6 @@ function ValeContent() {
     setIsSyncing(true);
     try {
       const payload = preparePayload();
-      // Normalizar URL de la API para evitar doble //
       const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
       
       const response = await fetch(`${baseApi}/generate-vale`, {
@@ -294,7 +301,7 @@ function ValeContent() {
           rubro={voucherData.rubro}
           concepto={voucherStatus?.concepto || voucherData.concepto}
           numVale={voucherData.numVale}
-          monto={voucherData.monto}
+          monto={voucherStatus?.monto || voucherData.monto}
           sucursal={voucherData.sucursal}
           sheet={voucherData.sheet}
           signatureUrl={voucherStatus?.firmaUrl}
