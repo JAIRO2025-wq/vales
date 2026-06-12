@@ -5,6 +5,11 @@ export const configData = {
       "pin": "7777",
       "role": "CAJERA",
       "branch": "SAN MIGUEL"
+    },
+    "JOSE JUANA": {
+      "pin": "8888",
+      "role": "CAJERA",
+      "branch": "MORAZAN"
     }
   },
   "EMPRESA": "FLYNET S.A. de C.V.",

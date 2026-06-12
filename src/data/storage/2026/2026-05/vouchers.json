@@ -1,0 +1,18 @@
+[
+  {
+    "fila": "6",
+    "sheet": "OTROS GASTOS",
+    "id": "MORAZAN-2026-06-W2-OTROSGASTOS-F6",
+    "fecha": "2026-06-12",
+    "entregado": "Zayra Gomez",
+    "rubro": "Vehiculos",
+    "concepto": "MORAZAN VALE 01",
+    "numVale": "1",
+    "monto": "13",
+    "sucursal": "MORAZAN",
+    "firmado": true,
+    "timestamp": "2026-06-12T16:45:06.539Z",
+    "firmaUrl": "imagenes/FIRMA_VALE_001.png",
+    "autorizadoPor": "JOSE JUANA"
+  }
+]

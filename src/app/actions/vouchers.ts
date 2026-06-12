@@ -51,6 +51,28 @@ export async function normalizeId(id: string): Promise<string> {
 }
 
 /**
+ * Convierte una ruta relativa de imagen a una URL absoluta del API.
+ * Si ya es un data URI o URL absoluta, la devuelve tal cual.
+ */
+function resolveImageUrl(path: string | undefined, fecha: string, origin: string): string | undefined {
+  if (!path) return undefined;
+  
+  // Si ya es un data URI, devolverlo tal cual
+  if (path.startsWith('data:')) return path;
+  
+  // Si ya es una URL absoluta, devolverla tal cual
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  
+  // Si es una ruta relativa del storage, construir URL del API
+  if (path.startsWith('imagenes/') || path.startsWith('pdfs/')) {
+    return `${origin}/api/imagenes?fecha=${encodeURIComponent(fecha)}&file=${encodeURIComponent(path)}`;
+  }
+  
+  // Si no coincide con ningún formato conocido, devolver tal cual
+  return path;
+}
+
+/**
  * Formatea un vale para que la App y la API hablen el mismo idioma
  */
 export async function formatVoucherForApi(voucher: VoucherRecord, origin: string): Promise<FormattedVoucher> {
@@ -68,10 +90,19 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
   
   const auditUrl = `${origin}/vale?${params.toString()}`;
 
+  // Resolver URLs de imágenes: convertir rutas relativas a URLs absolutas
+  const firmaUrlResuelta = resolveImageUrl(voucher.firmaUrl, voucher.fecha, origin);
+  const comprobanteUrlResuelto = resolveImageUrl(voucher.comprobanteUrl, voucher.fecha, origin);
+
   return {
     id: voucher.id,
     firmado: !!(voucher.firmado || (voucher.motivoOmitido && voucher.motivoOmitido.trim().length > 2)),
-    comprobante: !!(voucher.comprobanteUrl && voucher.comprobanteUrl.length > 50),
+    comprobante: !!(comprobanteUrlResuelto && (
+      comprobanteUrlResuelto.startsWith('data:') || 
+      comprobanteUrlResuelto.startsWith('http') ||
+      comprobanteUrlResuelto.startsWith('/api/') ||
+      comprobanteUrlResuelto.startsWith('imagenes/')
+    )),
     pdfUrl: auditUrl,
     fechaFirma: voucher.timestamp || null,
     firmante: voucher.entregado || null,
@@ -79,7 +110,11 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
     motivoOmitido: voucher.motivoOmitido || null,
     concepto: voucher.concepto || null,
     archivado: !!voucher.hasPdf,
-    raw: voucher
+    raw: {
+      ...voucher,
+      firmaUrl: firmaUrlResuelta,
+      comprobanteUrl: comprobanteUrlResuelto
+    }
   };
 }
 
@@ -129,20 +164,24 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
     const paddedNum = voucher.numVale.toString().padStart(3, '0');
     const targetId = await normalizeId(voucher.id);
 
-    // Guardar firma si viene en base64
+        // Guardar firma si viene en base64 y reemplazar por la referencia de archivo
+    let firmaPath = voucher.firmaUrl;
     if (voucher.firmaUrl && voucher.firmaUrl.startsWith('data:image/')) {
       const base64Data = voucher.firmaUrl.split(',')[1];
       const buffer = Buffer.from(base64Data, 'base64');
       const fileName = `FIRMA_VALE_${paddedNum}.png`;
       await fs.writeFile(path.join(imagesDir, fileName), buffer);
+      firmaPath = `imagenes/${fileName}`;
     }
 
-    // Guardar comprobante si viene en base64
+    // Guardar comprobante si viene en base64 y reemplazar por la referencia de archivo
+    let comprobantePath = voucher.comprobanteUrl;
     if (voucher.comprobanteUrl && voucher.comprobanteUrl.startsWith('data:image/')) {
       const base64Data = voucher.comprobanteUrl.split(',')[1];
       const buffer = Buffer.from(base64Data, 'base64');
       const fileName = `CBT_VALE_${paddedNum}.jpg`;
       await fs.writeFile(path.join(imagesDir, fileName), buffer);
+      comprobantePath = `imagenes/${fileName}`;
     }
 
     const jsonPath = path.join(cycleDir, 'vouchers.json');
@@ -153,7 +192,7 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
       vouchers = JSON.parse(content);
     } catch (e) {}
     
-    const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
+        const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
     
     if (index >= 0) {
       const existing = vouchers[index];
@@ -164,8 +203,8 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
         ...voucher,
         id: targetId,
         firmado: voucher.firmado || existing.firmado || !!existing.motivoOmitido,
-        firmaUrl: voucher.firmaUrl || existing.firmaUrl,
-        comprobanteUrl: voucher.comprobanteUrl || existing.comprobanteUrl,
+        firmaUrl: firmaPath,
+        comprobanteUrl: comprobantePath,
         motivoOmitido: voucher.motivoOmitido || existing.motivoOmitido,
         hasPdf: voucher.hasPdf || existing.hasPdf,
         autorizadoPor: voucher.autorizadoPor || existing.autorizadoPor,
@@ -174,7 +213,9 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
     } else {
       vouchers.push({
         ...voucher,
-        id: targetId
+        id: targetId,
+        firmaUrl: firmaPath,
+        comprobanteUrl: comprobantePath
       });
     }
     
@@ -241,7 +282,18 @@ export async function checkVoucherStatusAction(id: string, fecha: string) {
     const cycle = await getCycleFromDate(fecha);
     const vouchers = await getVouchersByCycleAction(cycle.id);
     const targetId = await normalizeId(id);
-    return vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId) || null;
+    const voucher = vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
+    
+    if (!voucher) return null;
+    
+    // Resolver rutas relativas de imágenes si es necesario
+    const origin = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+    
+    return {
+      ...voucher,
+      firmaUrl: resolveImageUrl(voucher.firmaUrl, voucher.fecha, origin),
+      comprobanteUrl: resolveImageUrl(voucher.comprobanteUrl, voucher.fecha, origin),
+    };
   } catch (e) {
     return null;
   }
