@@ -26,5 +26,5 @@ export const configData = {
     "Instalaciones",
     "Otros Gastos"
   ],
-  "PDF_API_URL": "https://servervale.modulos.uk/"
+  "PDF_API_URL": "https://vales001.modulos.uk/"
 };

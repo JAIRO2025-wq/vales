@@ -147,7 +147,12 @@ function AdjuntarContent() {
       });
 
       if (!uploadResponse.ok) {
-        throw new Error('Error al subir comprobante al servidor Python');
+        let errorDetail = `HTTP ${uploadResponse.status}`;
+        try {
+          const errorBody = await uploadResponse.text();
+          if (errorBody) errorDetail += `: ${errorBody.slice(0, 200)}`;
+        } catch {}
+        throw new Error(`Error al subir comprobante al servidor Python (${errorDetail})`);
       }
 
       const uploadData = await uploadResponse.json();
