@@ -198,7 +198,7 @@ def print_header(host, port, reload):
     print()
 
 
-def start_server(host="0.0.0.0", port=8000, reload=True):
+def start_server(host="0.0.0.0", port=8026, reload=True):
     """Inicia el servidor FastAPI con uvicorn."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(os.path.join(base_dir, "generated"), exist_ok=True)
@@ -227,8 +227,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inicia el servidor PDF Generator")
     parser.add_argument("--host", type=str, default="0.0.0.0",
                         help="Host (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8000,
-                        help="Puerto (default: 8000)")
+    parser.add_argument("--port", type=int, default=8026,
+                        help="Puerto (default: 8026)")
     parser.add_argument("--no-reload", action="store_true",
                         help="Desactiva recarga automática")
     args = parser.parse_args()
