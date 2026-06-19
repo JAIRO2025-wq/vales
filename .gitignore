@@ -45,11 +45,27 @@ firebase-debug.log
 firestore-debug.log
 
 
-#python
+# ========================
+# PYTHON (servidor/)
+# ========================
 __pycache__/
-/.venv/
-/generated/
-/storage/
+*.pyc
+*.pyo
+.venv/
+venv/
+generated/
+storage/
 
-/data
+# ========================
+# DATA (datos generados en runtime)
+# ========================
+# src/data/storage/ (vales, imágenes, pdfs generados)
+src/data/storage/
+# src/app/data/ (config runtime)
+src/app/data/
+
+# ========================
+# MISC
+# ========================
+*.log
 
