@@ -170,6 +170,9 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
     
     const targetId = await normalizeId(voucher.id);
 
+    // Normalizar sucursal a mayúsculas para evitar problemas de filtrado
+    const sucursalNormalizada = (voucher.sucursal || "").toUpperCase();
+
     // Las imágenes (firma y comprobante) ahora se almacenan en el servidor Python.
     // Solo guardamos la ruta que devuelve el servidor Python (ej: /storage/imagenes/vale123_firma_123456.png)
     const seEnvioFirma = voucher.firmaUrl !== undefined;
@@ -193,6 +196,7 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
         ...existing, 
         ...voucher,
         id: targetId,
+        sucursal: sucursalNormalizada,
         firmado: voucher.firmado || existing.firmado || !!existing.motivoOmitido,
         // Preservar firma/comprobante existentes si no se enviaron nuevos
         firmaUrl: seEnvioFirma ? voucher.firmaUrl : existing.firmaUrl,
@@ -205,7 +209,8 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
     } else {
       vouchers.push({
         ...voucher,
-        id: targetId
+        id: targetId,
+        sucursal: sucursalNormalizada
       });
     }
     

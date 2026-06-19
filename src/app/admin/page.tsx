@@ -219,7 +219,7 @@ function AdminContent() {
   };
 
   const filteredVales = vales.filter(v => {
-    const matchesSucursal = filterSucursal === "TODAS" || v.raw.sucursal === filterSucursal;
+    const matchesSucursal = filterSucursal === "TODAS" || v.raw.sucursal.toUpperCase() === filterSucursal;
     
     const sheet = v.raw.sheet.toUpperCase();
     let matchesCaja = filterCaja === "TODAS";
