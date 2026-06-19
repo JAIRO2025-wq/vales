@@ -68,7 +68,6 @@ src/app/data/
 # CONFIG (local, no versionar)
 # ========================
 src/data/config.json
-src/data/config.ts
 
 # ========================
 # MISC
