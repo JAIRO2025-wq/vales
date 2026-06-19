@@ -91,13 +91,91 @@ function FirmaContent() {
     }
   };
 
+    /**
+   * Convierte un data URI base64 a un objeto Blob para subir al servidor Python.
+   */
+  const base64ToBlob = (base64: string, type: string): Blob => {
+    const byteCharacters = atob(base64.split(',')[1]);
+    const byteArrays = [];
+    for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+      const slice = byteCharacters.slice(offset, offset + 512);
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      byteArrays.push(new Uint8Array(byteNumbers));
+    }
+    return new Blob(byteArrays, { type });
+  };
+
   const handleAction = async (signatureBase64?: string, skipMotivo?: string) => {
     setIsSubmitting(true);
     try {
+      let firmaPath: string | undefined;
+
+            // ===== PASO 1: Subir firma al servidor Python (si hay firma) =====
+      if (signatureBase64) {
+        if (!voucherData.id) {
+          throw new Error('ID del vale vacío — no se puede subir la firma');
+        }
+
+        const pythonBaseUrl = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+        const blob = base64ToBlob(signatureBase64, 'image/png');
+        const formData = new FormData();
+        const fileName = `vale_${voucherData.numVale}_firma_${Date.now()}.png`;
+        formData.append('file', blob, fileName);
+
+        // Intentar conexión con el servidor Python
+        let uploadResponse: Response;
+        try {
+          uploadResponse = await fetch(`${pythonBaseUrl}/upload-firma/${encodeURIComponent(voucherData.id)}`, {
+            method: 'POST',
+            body: formData
+          });
+        } catch (networkError) {
+          console.error('Error de red al conectar con servidor Python:', networkError);
+          throw new Error(
+            `No se pudo conectar con el servidor de firmas (${pythonBaseUrl}). ` +
+            'Verifica que el servidor Python esté corriendo y sea accesible desde internet.'
+          );
+        }
+
+        // Si la respuesta no es OK, extraer el detalle del error del servidor
+        if (!uploadResponse.ok) {
+          let errorDetail = `HTTP ${uploadResponse.status}`;
+          try {
+            const errorBody = await uploadResponse.text();
+            // Intentar extraer 'detail' si es JSON (formato FastAPI)
+            try {
+              const errorJson = JSON.parse(errorBody);
+              if (errorJson.detail) errorDetail += `: ${errorJson.detail}`;
+              else if (errorJson.message) errorDetail += `: ${errorJson.message}`;
+              else errorDetail += `: ${errorBody.slice(0, 200)}`;
+            } catch {
+              if (errorBody) errorDetail += `: ${errorBody.slice(0, 200)}`;
+            }
+          } catch {
+            // No se pudo leer el cuerpo
+          }
+          throw new Error(`Error al subir firma al servidor Python (${errorDetail})`);
+        }
+
+        // Leer respuesta exitosa
+        const uploadData = await uploadResponse.json();
+
+        if (!uploadData.success) {
+          throw new Error(uploadData.error || uploadData.detail || 'El servidor Python rechazó la firma sin dar más detalles');
+        }
+
+        // Ruta que devuelve el servidor Python (ej: /storage/imagenes/vale123_firma_123456.png)
+        firmaPath = uploadData.image_url;
+      }
+
+      // ===== PASO 2: Guardar SOLO la ruta en el JSON local =====
       await saveVoucherAction({
         ...voucherData,
         firmado: !skipMotivo,
-        firmaUrl: signatureBase64,
+        firmaUrl: firmaPath,
         motivoOmitido: skipMotivo,
         timestamp: new Date().toISOString(),
         autorizadoPor: authorizedUser?.name
@@ -112,7 +190,7 @@ function FirmaContent() {
             fila: voucherData.fila,
             sheet: voucherData.sheet,
             id: voucherData.id,
-            firma: signatureBase64 || "",
+            firma: firmaPath || "",
             motivo: skipMotivo || "",
             autorizadoPor: authorizedUser?.name,
             metodo: "updateFirma"
@@ -122,10 +200,15 @@ function FirmaContent() {
         console.warn("Google Sheets no respondió, pero el vale se guardó localmente.");
       }
 
-      setIsSuccess(true);
+            setIsSuccess(true);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Error desconocido";
       console.error("Error al sincronizar:", error);
-      toast({ variant: "destructive", title: "Error al guardar", description: "No se pudo procesar la firma." });
+      toast({
+        variant: "destructive",
+        title: "Error al guardar",
+        description: errorMessage,
+      });
     } finally {
       setIsSubmitting(false);
     }

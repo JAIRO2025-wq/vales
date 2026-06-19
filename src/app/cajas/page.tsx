@@ -10,8 +10,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { CONFIG } from "@/lib/config";
 import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
 import { getVouchersByCycleAction, type VoucherRecord } from "@/app/actions/vouchers";
-import { 
-  Building2, 
+import { Building2, 
   Calendar, 
   ChevronRight, 
   TrendingUp, 
@@ -22,6 +21,7 @@ import {
   Loader2,
   ArrowLeft
 } from "lucide-react";
+import { PinGate } from "@/components/PinGate";
 
 interface CajaResumen {
   tipo: string;
@@ -427,7 +427,9 @@ function CajasContent() {
 export default function CajasPage() {
   return (
     <Suspense fallback={<div className="p-8 text-center">Cargando resumen de cajas...</div>}>
-      <CajasContent />
+      <PinGate>
+        <CajasContent />
+      </PinGate>
     </Suspense>
   );
 }

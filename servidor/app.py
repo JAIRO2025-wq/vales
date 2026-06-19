@@ -5,71 +5,37 @@ import os
 import re
 import time
 import zipfile
+import shutil
 from typing import List, Optional
-
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-
 from pdf_generator import create_voucher_pdf
 
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'generated')
+IMAGES_DIR = os.path.join(os.path.dirname(__file__), 'storage', 'imagenes')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(IMAGES_DIR, exist_ok=True)
 
 app = FastAPI(title='Vale PDF Generator')
+
+# CORS más permisivo
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
+    expose_headers=['*'],
 )
 
-
-def safe_filename(value: str) -> str:
-    clean = re.sub(r'[^a-zA-Z0-9_.-]', '_', value or 'vale')
-    return clean
-
-
-def payload_hash(payload: dict) -> str:
-    normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
-
-
-def get_output_pdf_filename(params: dict, index: Optional[int] = None) -> str:
-    if params.get('id'):
-        file_base = safe_filename(params['id'])
-    else:
-        file_base = safe_filename(params.get('numero', 'vale'))
-        if index is None:
-            file_base = f"{file_base}-{int(time.time())}"
-        else:
-            file_base = f"{file_base}-{index}"
-    return f"{file_base}.pdf"
-
-
-def get_hash_path(output_path: str) -> str:
-    return f"{output_path}.hash"
-
-
-def should_skip_generation(output_path: str, params_hash: str) -> bool:
-    hash_path = get_hash_path(output_path)
-    if not os.path.exists(output_path) or not os.path.exists(hash_path):
-        return False
-    try:
-        with open(hash_path, 'r', encoding='utf-8') as hash_file:
-            return hash_file.read().strip() == params_hash
-    except Exception:
-        return False
-
-
-def write_payload_hash(output_path: str, params_hash: str) -> None:
-    hash_path = get_hash_path(output_path)
-    with open(hash_path, 'w', encoding='utf-8') as hash_file:
-        hash_file.write(params_hash)
-
-
+# ============================================================
+# MODELOS
+# ============================================================
 class ValeRequest(BaseModel):
     numero: Optional[str] = '0001'
     fecha: Optional[str] = ''
@@ -88,17 +54,187 @@ class ValeRequest(BaseModel):
     firmaSolicitante: Optional[str] = None
     comprobante: Optional[str] = None
 
+# ============================================================
+# FUNCIONES AUXILIARES
+# ============================================================
+def safe_filename(value: str) -> str:
+    clean = re.sub(r'[^a-zA-Z0-9_.-]', '_', value or 'vale')
+    return clean
 
-def create_zip_file(file_paths: List[str], output_path: str) -> str:
-    with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in file_paths:
-            zf.write(file_path, arcname=os.path.basename(file_path))
-    return output_path
+def payload_hash(payload: dict) -> str:
+    normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+
+def get_output_pdf_filename(params: dict, index: Optional[int] = None) -> str:
+    if params.get('id'):
+        file_base = safe_filename(params['id'])
+    else:
+        file_base = safe_filename(params.get('numero', 'vale'))
+        if index is None:
+            file_base = f"{file_base}-{int(time.time())}"
+        else:
+            file_base = f"{file_base}-{index}"
+    return f"{file_base}.pdf"
+
+def get_hash_path(output_path: str) -> str:
+    return f"{output_path}.hash"
+
+def should_skip_generation(output_path: str, params_hash: str) -> bool:
+    hash_path = get_hash_path(output_path)
+    if not os.path.exists(output_path) or not os.path.exists(hash_path):
+        return False
+    try:
+        with open(hash_path, 'r', encoding='utf-8') as hash_file:
+            return hash_file.read().strip() == params_hash
+    except Exception:
+        return False
+
+def write_payload_hash(output_path: str, params_hash: str) -> None:
+    hash_path = get_hash_path(output_path)
+    with open(hash_path, 'w', encoding='utf-8') as hash_file:
+        hash_file.write(params_hash)
+
+# ============================================================
+# NUEVOS ENDPOINTS PARA SUBIR IMÁGENES
+# ============================================================
+@app.post('/upload-firma/{vale_id}')
+async def upload_firma(vale_id: str, file: UploadFile = File(...)):
+    """Sube una imagen de firma directamente al servidor."""
+    try:
+        print(f"📸 Recibiendo firma para vale: {vale_id}")
+        print(f"   Archivo: {file.filename}, Tipo: {file.content_type}")
+        
+        # Validar tipo de archivo
+        if not file.content_type.startswith('image/'):
+            raise HTTPException(400, "Solo se permiten imágenes")
+        
+        # Generar nombre único
+        timestamp = int(time.time())
+        filename = f"{vale_id}_firma_{timestamp}.png"
+        filepath = os.path.join(IMAGES_DIR, filename)
+        
+        # Guardar archivo
+        with open(filepath, 'wb') as f:
+            shutil.copyfileobj(file.file, f)
+        
+        print(f"✅ Firma guardada en: {filepath}")
+        
+        return JSONResponse({
+            'success': True,
+            'image_path': filepath,
+            'image_url': f"/storage/imagenes/{filename}"
+        })
+    except Exception as e:
+        print(f"❌ Error subiendo firma: {e}")
+        raise HTTPException(500, f"Error subiendo firma: {e}")
+
+@app.post('/upload-comprobante/{vale_id}')
+async def upload_comprobante(vale_id: str, file: UploadFile = File(...)):
+    """Sube una imagen de comprobante directamente al servidor."""
+    try:
+        print(f"📸 Recibiendo comprobante para vale: {vale_id}")
+        print(f"   Archivo: {file.filename}, Tipo: {file.content_type}")
+        
+        if not file.content_type.startswith('image/'):
+            raise HTTPException(400, "Solo se permiten imágenes")
+        
+        timestamp = int(time.time())
+        filename = f"{vale_id}_comprobante_{timestamp}.png"
+        filepath = os.path.join(IMAGES_DIR, filename)
+        
+        with open(filepath, 'wb') as f:
+            shutil.copyfileobj(file.file, f)
+        
+        print(f"✅ Comprobante guardado en: {filepath}")
+        
+        return JSONResponse({
+            'success': True,
+            'image_path': filepath,
+            'image_url': f"/storage/imagenes/{filename}"
+        })
+    except Exception as e:
+        print(f"❌ Error subiendo comprobante: {e}")
+        raise HTTPException(500, f"Error subiendo comprobante: {e}")
+
+@app.get('/storage/imagenes/{filename}')
+async def get_imagen(filename: str):
+    """Sirve imágenes almacenadas en el servidor."""
+    filepath = os.path.join(IMAGES_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(404, "Imagen no encontrada")
+    return FileResponse(filepath, media_type='image/png')
+
+# ============================================================
+# ENDPOINTS PRINCIPALES (ya existentes)
+# ============================================================
+def _resolve_image_path(image_value: Optional[str]) -> Optional[str]:
+    """
+    Resuelve rutas de imágenes almacenadas en el servidor Python.
+
+    El frontend guarda rutas como "/storage/imagenes/xxx.png" (URL del servidor).
+    Esta función convierte esas URLs a rutas reales del sistema de archivos
+    para que el generador PDF pueda leer los archivos directamente.
+    """
+    if not image_value:
+        return None
+
+    # Si ya es una ruta local absoluta que existe, devolverla tal cual
+    if os.path.exists(image_value):
+        return image_value
+
+    # Si es una ruta de nuestro propio servidor (/storage/imagenes/...)
+    # convertirla a la ruta real en disco
+    if image_value.startswith('/storage/imagenes/'):
+        filename = os.path.basename(image_value)
+        local_path = os.path.join(IMAGES_DIR, filename)
+        if os.path.exists(local_path):
+            print(f'[APP] Ruta resuelta: {image_value} -> {local_path}')
+            return local_path
+        else:
+            print(f'[APP] ADVERTENCIA: No se encontró {local_path} para {image_value}')
+            # Intentar buscar el archivo en IMAGES_DIR por nombre
+            for f in os.listdir(IMAGES_DIR):
+                if filename in f:
+                    fallback = os.path.join(IMAGES_DIR, f)
+                    print(f'[APP] Fallback encontrado: {fallback}')
+                    return fallback
+            return None
+
+    # Si es una URL HTTP/HTTPS, devolverla para que pdf_generator la descargue
+    if image_value.startswith(('http://', 'https://')):
+        return image_value
+
+    # Si es base64 data URI, devolverla para que pdf_generator la decodifique
+    if image_value.startswith('data:') or ',' in image_value:
+        return image_value
+
+    # Fallback: devolver el valor original (pdf_generator intentará manejarlo)
+    return image_value
 
 
 @app.post('/generate-vale')
 async def generate_vale(request: Request, payload: ValeRequest):
     params = payload.dict()
+
+    # ===== RESOLVER RUTAS DE IMÁGENES =====
+    # El frontend envía rutas como "/storage/imagenes/xxx.png" (URL del servidor).
+    # Las convertimos a rutas reales del sistema de archivos ANTES de generar el PDF
+    # para que el generador pueda leer los archivos directamente.
+    #
+    # Esto resuelve el bug: el PDF se generaba sin firma ni comprobante porque
+    # las rutas enviadas por el frontend no correspondían a rutas válidas del sistema.
+    #
+    # IMPORTANTE: No guardamos base64 en el JSON, solo rutas.
+    # El servidor es lo suficientemente inteligente para resolverlas.
+    firma_original = params.get('firmaSolicitante')
+    comprobante_original = params.get('comprobante')
+    params['firmaSolicitante'] = _resolve_image_path(firma_original)
+    params['comprobante'] = _resolve_image_path(comprobante_original)
+
+    print(f'[APP] Generando PDF para vale {params.get("id", "desconocido")}')
+    print(f'[APP]   Firma:   orig="{firma_original}" -> resuelto="{params["firmaSolicitante"]}"')
+    print(f'[APP]   Comprobante: orig="{comprobante_original}" -> resuelto="{params["comprobante"]}"')
+
     file_name = get_output_pdf_filename(params)
     output_path = os.path.join(OUTPUT_DIR, file_name)
     params_hash = payload_hash(params)
@@ -113,7 +249,6 @@ async def generate_vale(request: Request, payload: ValeRequest):
     pdf_url = str(request.url_for('get_pdf', pdf_file_name=file_name))
     return JSONResponse({'pdf_url': pdf_url})
 
-
 @app.post('/generate-vale-bulk')
 async def generate_vale_bulk(request: Request, payload: List[ValeRequest]):
     if not payload:
@@ -123,6 +258,11 @@ async def generate_vale_bulk(request: Request, payload: List[ValeRequest]):
 
     for index, item in enumerate(payload, start=1):
         params = item.dict()
+
+        # Resolver rutas de imágenes igual que en generate-vale individual
+        params['firmaSolicitante'] = _resolve_image_path(params.get('firmaSolicitante'))
+        params['comprobante'] = _resolve_image_path(params.get('comprobante'))
+
         file_name = get_output_pdf_filename(params, index)
         output_path = os.path.join(OUTPUT_DIR, file_name)
         params_hash = payload_hash(params)
@@ -147,6 +287,11 @@ async def generate_vale_bulk(request: Request, payload: List[ValeRequest]):
     zip_url = str(request.url_for('get_zip', zip_file_name=zip_name))
     return JSONResponse({'zip_url': zip_url})
 
+def create_zip_file(file_paths: List[str], output_path: str) -> str:
+    with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        for file_path in file_paths:
+            zf.write(file_path, arcname=os.path.basename(file_path))
+    return output_path
 
 @app.get('/pdf/{pdf_file_name}')
 async def get_pdf(pdf_file_name: str):
@@ -155,14 +300,12 @@ async def get_pdf(pdf_file_name: str):
         raise HTTPException(status_code=404, detail='PDF no encontrado')
     return FileResponse(file_path, media_type='application/pdf', filename=pdf_file_name)
 
-
 @app.get('/zip/{zip_file_name}')
 async def get_zip(zip_file_name: str):
     file_path = os.path.join(OUTPUT_DIR, zip_file_name)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail='ZIP no encontrado')
     return FileResponse(file_path, media_type='application/zip', filename=zip_file_name)
-
 
 @app.get('/')
 async def root():

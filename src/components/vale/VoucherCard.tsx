@@ -436,7 +436,7 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
           <div className="signatures-area">
             <div className="sig-box">
               <div className="hand">
-                {signatureUrl && <img src={signatureUrl} alt="Firma" style={{ maxHeight: "60px", maxWidth: "250px", mixBlendMode: "multiply" }} />}
+                {signatureUrl && <img src={signatureUrl} alt="Firma" style={{ maxHeight: "90px", maxWidth: "375px", mixBlendMode: "multiply" }} />}
                 {motivoOmitido && <div className="omission-msg">AUTORIZADO SIN FIRMA: {motivoOmitido}</div>}
               </div>
               <div className="line"></div>

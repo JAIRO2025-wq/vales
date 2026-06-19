@@ -1,6 +1,8 @@
 import base64
 import io
+import urllib.request
 from io import BytesIO
+from pathlib import Path
 from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -23,13 +25,10 @@ def draw_field(c, label, x, y, total_width, value='', bold_value=True, suffix=''
     c.setFont('Helvetica', 9)
     c.drawString(x, y, label)
     
-    # Calcular el ancho exacto del texto de la etiqueta
     label_width = c.stringWidth(label, 'Helvetica', 9)
-    
     rect_x = x + label_width + 5
     rect_y = y - 4
     
-    # Si hay un sufijo (ej. "/100 dólares"), restamos su espacio
     if suffix:
         suffix_width = c.stringWidth(suffix, 'Helvetica', 8)
         rect_width = total_width - label_width - 5 - suffix_width - 5
@@ -58,24 +57,121 @@ def draw_checkbox(c, x, y, label, checked=False):
 
     if checked:
         c.setLineWidth(1.5)
-        # Checkmark centrado y limpio
         c.line(x + 2, y + 3, x + size / 2.5, y - 1)
         c.line(x + size / 2.5, y - 1, x + size - 1, y + size - 1)
 
+# ============================================================
+# DIRECTORIO DE IMÁGENES (relativo a este archivo)
+# ============================================================
+# El servidor Python guarda las imágenes en servidor/storage/imagenes/
+# pdf_generator.py está en servidor/, así que derivamos la ruta:
+PDF_DIR = Path(__file__).parent  # servidor/
+IMAGES_DIR = PDF_DIR / 'storage' / 'imagenes'
 
-def draw_signature_image(c, x, y, width, height, image_b64):
-    if not image_b64:
-        return
-    if ',' in image_b64:
-        image_b64 = image_b64.split(',', 1)[1]
+
+def _resolve_storage_path(image_value):
+    """
+    Intenta resolver una ruta /storage/imagenes/... a una ruta local real.
+    Útil como fallback por si la resolución no se hizo en app.py.
+    """
+    if not isinstance(image_value, str):
+        return image_value
+
+    # Si la ruta empieza con /storage/imagenes/ (formato URL del servidor Python)
+    if image_value.startswith('/storage/imagenes/'):
+        filename = Path(image_value).name
+        local_path = IMAGES_DIR / filename
+        if local_path.exists():
+            print(f'[PDF] Ruta /storage/ resuelta a archivo local: {local_path}')
+            return str(local_path)
+        # Fallback: buscar cualquier archivo que contenga ese nombre
+        if IMAGES_DIR.exists():
+            for f in IMAGES_DIR.iterdir():
+                if f.is_file() and filename in f.name:
+                    print(f'[PDF] Fallback: encontrado {f}')
+                    return str(f)
+        print(f'[PDF] No se pudo resolver /storage/ para: {image_value}')
+    return image_value
+
+
+def resolve_image_data(image_value, label='imagen'):
+    """
+    Resuelve una imagen desde:
+    - Ruta local (archivo en disco)
+    - Ruta /storage/imagenes/... (formato interno del servidor)
+    - URL http/https
+    - Base64
+    """
+    if not image_value:
+        print(f'[PDF] {label}: Sin valor de imagen, se omite')
+        return None
+
+    # === PASO 1: Resolver rutas internas del servidor ===
+    # Si la ruta es /storage/imagenes/... (no resuelta por app.py),
+    # la convertimos a ruta local real
+    resolved = _resolve_storage_path(image_value)
+
+    # === PASO 2: Si es una ruta local (archivo existente) ===
+    if isinstance(resolved, str) and Path(resolved).exists():
+        try:
+            print(f'[PDF] {label}: Leyendo archivo local: {resolved}')
+            with open(resolved, 'rb') as f:
+                data = f.read()
+                print(f'[PDF] {label}: Leídos {len(data)} bytes')
+                return data
+        except Exception as e:
+            print(f'[PDF] {label}: Error leyendo archivo local: {e}')
+            return None
+
+    # === PASO 3: Si es una URL http/https ===
+    if isinstance(resolved, str) and (resolved.startswith('http://') or resolved.startswith('https://')):
+        try:
+            print(f'[PDF] {label}: Descargando desde URL (timeout=30s)...')
+            with urllib.request.urlopen(resolved, timeout=30) as response:
+                data = response.read()
+                print(f'[PDF] {label}: Descargados {len(data)} bytes desde URL')
+                return data
+        except Exception as e:
+            print(f'[PDF] {label}: Error descargando imagen desde URL: {e}')
+            return None
+
+    # === PASO 4: Si es base64 data URI ===
+    image_str = str(resolved) if not isinstance(resolved, str) else resolved
+    if ',' in image_str:
+        print(f'[PDF] {label}: Detectado data URI base64, extrayendo payload...')
+        image_str = image_str.split(',', 1)[1]
+    else:
+        print(f'[PDF] {label}: Interpretando como base64 plano...')
+
+    # === PASO 5: Decodificar base64 ===
     try:
-        image_data = base64.b64decode(image_b64)
-    except Exception:
+        decoded = base64.b64decode(image_str)
+        print(f'[PDF] {label}: Decodificados {len(decoded)} bytes')
+        return decoded
+    except Exception as e:
+        print(f'[PDF] {label}: Error decodificando base64: {e}')
+        try:
+            import re
+            cleaned = re.sub(r'[^A-Za-z0-9+/=]', '', image_str)
+            decoded = base64.b64decode(cleaned)
+            print(f'[PDF] {label}: Decodificados {len(decoded)} bytes tras limpiar caracteres')
+            return decoded
+        except Exception as e2:
+            print(f'[PDF] {label}: Error incluso tras limpiar: {e2}')
+            return None
+
+def draw_signature_image(c, x, y, width, height, image_value, label='firma'):
+    """Dibuja una imagen de firma dentro de un recuadro."""
+    image_data = resolve_image_data(image_value, label=label)
+    if image_data is None:
+        print(f'[PDF] {label}: No se pudo resolver la imagen, se omite')
         return
 
     try:
         image = Image.open(BytesIO(image_data))
-    except Exception:
+        print(f'[PDF] {label}: Imagen abierta: {image.size[0]}x{image.size[1]}px, modo={image.mode}')
+    except Exception as e:
+        print(f'[PDF] {label}: Error abriendo imagen con Pillow: {e}')
         return
 
     if image.mode not in ('RGB', 'RGBA'):
@@ -95,21 +191,20 @@ def draw_signature_image(c, x, y, width, height, image_b64):
     draw_x = x + (width - draw_width) / 2
     draw_y = y + (height - draw_height) / 2
     c.drawImage(image_reader, draw_x, draw_y, draw_width, draw_height, mask='auto')
+    print(f'[PDF] {label}: Imagen dibujada en ({draw_x:.0f}, {draw_y:.0f}) tamaño {draw_width:.0f}x{draw_height:.0f}')
 
-
-def draw_image_page(c, image_b64, title='Comprobante'):
-    if not image_b64:
-        return
-    if ',' in image_b64:
-        image_b64 = image_b64.split(',', 1)[1]
-    try:
-        image_data = base64.b64decode(image_b64)
-    except Exception:
+def draw_image_page(c, image_value, title='Comprobante'):
+    """Dibuja una imagen (ej. comprobante/ticket) en una página completa."""
+    image_data = resolve_image_data(image_value, label=title)
+    if image_data is None:
+        print(f'[PDF] {title}: No se pudo resolver la imagen, se omite la página')
         return
 
     try:
         image = Image.open(BytesIO(image_data))
-    except Exception:
+        print(f'[PDF] {title}: Imagen abierta: {image.size[0]}x{image.size[1]}px, modo={image.mode}')
+    except Exception as e:
+        print(f'[PDF] {title}: Error abriendo imagen con Pillow: {e}')
         return
 
     if image.mode not in ('RGB', 'RGBA'):
@@ -134,7 +229,7 @@ def draw_image_page(c, image_b64, title='Comprobante'):
     draw_x = LEFT + (max_width - draw_width) / 2
     draw_y = MARGIN + (max_height - draw_height) / 2
     c.drawImage(image_reader, draw_x, draw_y, draw_width, draw_height, mask='auto')
-
+    print(f'[PDF] {title}: Imagen dibujada en página completa ({draw_width:.0f}x{draw_height:.0f})')
 
 def create_voucher_pdf(data=None, output_path=None):
     data = data or {}
@@ -142,24 +237,22 @@ def create_voucher_pdf(data=None, output_path=None):
     c = canvas.Canvas(buffer, pagesize=letter)
     c.setTitle('Vale de Caja')
 
-    # --- Watermark (Centrado en el área del vale) ---
+    # Watermark
     c.saveState()
     c.setFillColorRGB(0.95, 0.95, 0.95)
     c.setFont('Helvetica-Bold', 72)
     c.drawCentredString(PAGE_WIDTH / 2, PAGE_HEIGHT - 180, 'flynet')
     c.restoreState()
 
-    # --- Encabezado ---
+    # Encabezado
     TOP = PAGE_HEIGHT - 60
     
-    # Logo
     c.setFillColor(black)
     c.setFont('Helvetica-Bold', 26)
     c.drawString(LEFT, TOP, 'flynet')
     c.setFont('Helvetica', 10)
     c.drawString(LEFT + 80, TOP, 'S.A. de C.V.')
 
-    # Título "VALE DE CAJA" (Alineado a la derecha)
     title_width = 160
     title_x = RIGHT - title_width
     title_y = TOP - 4
@@ -171,7 +264,6 @@ def create_voucher_pdf(data=None, output_path=None):
     c.drawCentredString(title_x + (title_width / 2), title_y + 6, 'VALE DE CAJA')
     c.setFillColor(black)
 
-    # Número y Fecha (Debajo del título)
     info_y = title_y - 22
     c.setFont('Helvetica', 9)
     c.drawString(title_x, info_y, 'N°:')
@@ -185,60 +277,50 @@ def create_voucher_pdf(data=None, output_path=None):
     c.setFont('Helvetica-Bold', 9)
     c.drawString(title_x + 108, info_y, data.get('fecha', ''))
 
-    # --- Línea divisoria superior ---
     y = info_y - 20
     draw_line(c, LEFT, y, RIGHT, y)
 
-    # --- Checkboxes (Primera fila) ---
     y -= 20
     draw_checkbox(c, LEFT + 20, y, 'Caja chica', data.get('cajaChica', False))
     draw_checkbox(c, LEFT + 180, y, 'Clientes', data.get('clientes', False))
     draw_checkbox(c, LEFT + 340, y, 'Instalaciones', data.get('instalaciones', False))
     
-    # --- Checkboxes (Segunda fila) ---
     y -= 18
     draw_checkbox(c, LEFT + 20, y, 'Otros Gastos', data.get('otrosGastos', False))
 
-    # --- Línea divisoria ---
     y -= 15
     draw_line(c, LEFT, y, RIGHT, y)
 
-    # --- Campos principales (Fila 1) ---
     y -= 28
-    # Entregado a (Ocupa 300 puntos de ancho)
     draw_field(c, 'Entregado a:', LEFT, y, 300, data.get('entregadoA', ''))
-    # La suma de (Ocupa el resto hasta el margen derecho, incluyendo el sufijo)
     draw_field(c, 'La suma de:', LEFT + 310, y, RIGHT - (LEFT + 310), data.get('laSumaDe', ''), suffix='/100 dólares')
 
-    # --- Concepto (Fila 2) ---
     y -= 32
     draw_field(c, 'En concepto de:', LEFT, y, RIGHT - LEFT, data.get('concepto', ''))
 
-    # --- Línea divisoria ---
     y -= 20
     draw_line(c, LEFT, y, RIGHT, y)
 
-    # --- Monto total y Reintegro (Fila 3) ---
     y -= 28
     c.setFont('Helvetica', 9)
     c.drawString(LEFT, y, 'Monto total:')
     c.setFont('Helvetica-Bold', 11)
     monto_total = data.get('montoTotal', '')
     if monto_total:
-        c.drawString(LEFT + 65, y, f"$ {float(monto_total):,.2f}")
+        try:
+            c.drawString(LEFT + 65, y, f"$ {float(monto_total):,.2f}")
+        except:
+            c.drawString(LEFT + 65, y, f"$ {monto_total}")
 
     draw_field(c, 'Reintegro de caja:', LEFT + 260, y, RIGHT - (LEFT + 260), data.get('reintegro', ''))
 
-    # --- Línea divisoria ---
     y -= 20
     draw_line(c, LEFT, y, RIGHT, y)
 
-    # --- Solicitante y Autoriza (Firmas) ---
     y -= 130
     box_width = 220
     box_height = 80
     
-    # Solicitante (Izquierda)
     c.setFont('Helvetica-Bold', 10)
     c.drawString(LEFT, y + box_height + 15, 'Solicitante')
     c.setFont('Helvetica', 8)
@@ -249,7 +331,6 @@ def create_voucher_pdf(data=None, output_path=None):
         c.setFont('Helvetica-Bold', 8)
         c.drawCentredString(LEFT + (box_width / 2), y + 5, data.get('solicitante'))
 
-    # Autoriza (Derecha)
     autoriza_x = RIGHT - box_width
     c.setFont('Helvetica-Bold', 10)
     c.drawString(autoriza_x, y + box_height + 15, 'Autoriza')
@@ -260,11 +341,10 @@ def create_voucher_pdf(data=None, output_path=None):
         c.setFont('Helvetica-Bold', 8)
         c.drawCentredString(autoriza_x + (box_width / 2), y + 5, data.get('autoriza'))
 
-    # --- Línea punteada final para recortar ---
     y -= 40
-    c.setDash(6, 4)  # Patrón: 6 puntos pintados, 4 puntos de espacio
+    c.setDash(6, 4)
     c.line(LEFT, y, RIGHT, y)
-    c.setDash(1, 0)  # Restablecer línea continua para la siguiente página
+    c.setDash(1, 0)
 
     comprobante = data.get('comprobante')
     if comprobante:
@@ -280,7 +360,6 @@ def create_voucher_pdf(data=None, output_path=None):
         return output_path
 
     return buffer.getvalue()
-
 
 if __name__ == '__main__':
     create_voucher_pdf(

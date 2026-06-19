@@ -13,10 +13,9 @@ import {
   Download, 
   QrCode, 
   Camera,
-  Signature,
-  Copy
+  Signature
 } from "lucide-react";
-import { checkVoucherStatusAction, savePdfAction, saveVoucherAction, type VoucherRecord } from "@/app/actions/vouchers";
+import { checkVoucherStatusAction, savePdfAction, saveVoucherAction, notifyArchiveAction, type VoucherRecord, type VoucherStatusResult } from "@/app/actions/vouchers";
 import { useToast } from "@/hooks/use-toast";
 import { CONFIG } from "@/lib/config";
 
@@ -25,11 +24,13 @@ function ValeContent() {
   const router = useRouter();
   const { toast } = useToast();
   
-  const [voucherStatus, setVoucherStatus] = useState<VoucherRecord | null>(null);
+  const [voucherStatus, setVoucherStatus] = useState<VoucherStatusResult | null>(null);
   const [isChecking, setIsChecking] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [hasDismissedModal, setHasDismissedModal] = useState(false);
+  
+    
   
   const voucherData = {
     fila: searchParams.get("fila") || "",
@@ -48,23 +49,29 @@ function ValeContent() {
     const initVoucher = async () => {
       if (!voucherData.id) return;
       try {
-        // Consultamos si ya existe en disco
+                        // Consultamos si ya existe en disco (pasando el origen real)
         const existingStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
         
-        // Siempre sincronizamos los datos del URL con el disco al cargar para reflejar cambios en Excel
-        // pero preservando firmas y comprobantes si ya existen.
-        await saveVoucherAction({
+        // Guardar los datos básicos del vale (sin machacar firma/comprobante si ya existen)
+        // IMPORTANTE: NO pasar firmaUrl ni comprobanteUrl resueltas - solo los datos crudos del URL
+        const newVoucher: any = {
           ...voucherData,
-          firmado: existingStatus?.firmado || false,
-          firmaUrl: existingStatus?.firmaUrl,
-          comprobanteUrl: existingStatus?.comprobanteUrl,
-          motivoOmitido: existingStatus?.motivoOmitido,
-          hasPdf: existingStatus?.hasPdf,
-          autorizadoPor: existingStatus?.autorizadoPor,
-          timestamp: existingStatus?.timestamp || new Date().toISOString()
-        } as any);
+          firmado: false,
+          timestamp: new Date().toISOString()
+        };
+        // Solo si EXISTE en disco, preservamos sus datos
+        if (existingStatus) {
+          newVoucher.firmado = existingStatus.firmado;
+          newVoucher.motivoOmitido = existingStatus.motivoOmitido;
+          newVoucher.hasPdf = existingStatus.hasPdf;
+          newVoucher.autorizadoPor = existingStatus.autorizadoPor;
+          newVoucher.timestamp = existingStatus.timestamp;
+          // NO tocar firmaUrl ni comprobanteUrl - se preservan solos en saveVoucherAction
+          // porque busca por ID y mantiene los valores existentes
+        }
+        await saveVoucherAction(newVoucher);
 
-        // Volvemos a consultar para tener el estado actualizado
+        // Volvemos a consultar (con origen real) para tener el estado actualizado
         const finalStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
         if (finalStatus) setVoucherStatus(finalStatus);
 
@@ -77,7 +84,7 @@ function ValeContent() {
     
     initVoucher();
     
-    // Polling para actualizaciones en tiempo real (por si firman desde celular)
+        // Polling para actualizaciones en tiempo real (por si firman desde celular)
     const interval = setInterval(async () => {
       if (!voucherData.id) return;
       const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
@@ -86,6 +93,34 @@ function ValeContent() {
     
     return () => clearInterval(interval);
   }, [voucherData.id, voucherData.fecha, voucherData.monto, voucherData.concepto]);
+
+        /**
+   * Prepara el valor de imagen para enviar al servidor Python.
+   * 
+   * Ahora las imágenes se almacenan directamente en el servidor Python,
+   * por lo que solo tenemos que pasar la ruta relativa que nos devolvió
+   * el servidor (ej: /storage/imagenes/vale123_firma_123456.png).
+   * 
+   * El servidor Python puede acceder a estas rutas localmente en su disco.
+   */
+  const prepareImageValue = (rawPath: string | undefined): string | null => {
+    if (!rawPath) return null;
+    // Si ya es una ruta del servidor Python, la enviamos directamente
+    // (el servidor Python puede acceder a /storage/... localmente)
+    if (rawPath.startsWith('/storage/')) {
+      return rawPath;
+    }
+    // Si es una URL absoluta, enviarla tal cual
+    if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) {
+      return rawPath;
+    }
+    // Si es un base64 (legacy), enviarlo tal cual (el servidor Python lo decodifica)
+    if (rawPath.startsWith('data:')) {
+      return rawPath;
+    }
+    // Fallback: devolver la ruta tal cual
+    return rawPath;
+  };
 
   const preparePayload = () => {
     const sheetUpper = (voucherData.sheet || "").toUpperCase();
@@ -110,80 +145,77 @@ function ValeContent() {
       reintegro: "0.00",
       solicitante: voucherData.entregado,
       autoriza: voucherStatus?.autorizadoPor || voucherData.sucursal,
-      firmaSolicitante: voucherStatus?.firmaUrl || null,
-      comprobante: voucherStatus?.comprobanteUrl || null
+                        // Enviamos la ruta del servidor Python directamente.
+            // Como las imágenes están almacenadas en el servidor Python,
+            // usamos firmaUrlRaw (la ruta original guardada en vouchers.json)
+            // que es la ruta que devolvió el servidor Python al subir la imagen.
+            firmaSolicitante: prepareImageValue(voucherStatus?.firmaUrlRaw),
+            comprobante: prepareImageValue(voucherStatus?.comprobanteUrlRaw)
     };
   };
 
-  const handleDownloadPDF = async () => {
-    setIsSavingPdf(true);
-    try {
-      const payload = preparePayload();
-      const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+    const handleDownloadPDF = async () => {
+      setIsSavingPdf(true);
+      try {
+        const payload = preparePayload();
+        const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
       
-      const response = await fetch(`${baseApi}/generate-vale`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) throw new Error("Error en el servidor de PDF");
-      const data = await response.json();
-      if (data.pdf_url) {
-        window.open(data.pdf_url, '_blank');
-        toast({ title: "PDF Generado", description: "Documento listo para descargar." });
-      }
-    } catch (err) {
-      console.error(err);
-      toast({ variant: "destructive", title: "Error", description: "No se pudo conectar con el motor de PDF." });
-    } finally {
-      setIsSavingPdf(false);
-    }
-  };
-
-  const handleArchiveVoucher = async () => {
-    setIsSyncing(true);
-    try {
-      const payload = preparePayload();
-      const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
-      
-      const response = await fetch(`${baseApi}/generate-vale`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) throw new Error("Error al generar PDF");
-      const data = await response.json();
-      if (!data.pdf_url) throw new Error("URL de PDF no recibida");
-
-      const pdfResponse = await fetch(data.pdf_url);
-      const pdfBlob = await pdfResponse.blob();
-      const reader = new FileReader();
-      reader.readAsDataURL(pdfBlob);
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        await savePdfAction(voucherData.id, voucherData.fecha, voucherData.numVale, base64data);
-        await fetch(CONFIG.API_URL, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fila: voucherData.fila,
-            sheet: voucherData.sheet,
-            id: voucherData.id,
-            pdfUrl: `${window.location.origin}/vale?${new URLSearchParams(voucherData as any).toString()}`,
-            metodo: "updatePdf"
-          }),
+        const response = await fetch(`${baseApi}/generate-vale`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
+        if (!response.ok) throw new Error("Error en el servidor de PDF");
+        const data = await response.json();
+        if (data.pdf_url) {
+          window.open(data.pdf_url, '_blank');
+          toast({ title: "PDF Generado", description: "Documento listo para descargar." });
+        }
+      } catch (err) {
+        console.error(err);
+        toast({ variant: "destructive", title: "Error", description: "No se pudo conectar con el motor de PDF." });
+      } finally {
+        setIsSavingPdf(false);
+      }
+    };
+
+    const handleArchiveVoucher = async () => {
+      setIsSyncing(true);
+      try {
+        const payload = preparePayload();
+        const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+      
+        const response = await fetch(`${baseApi}/generate-vale`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error("Error al generar PDF");
+        const data = await response.json();
+        if (!data.pdf_url) throw new Error("URL de PDF no recibida");
+
+        // Pasar la URL del PDF al servidor para que lo descargue directamente
+        // (evita enviar el PDF en base64 como parámetro de Server Action)
+        const pdfResult = await savePdfAction(voucherData.id, voucherData.fecha, voucherData.numVale, data.pdf_url);
+        if (!pdfResult.success) throw new Error(pdfResult.error || "Error al guardar el PDF");
+
         toast({ title: "Completado", description: "Documento archivado con éxito." });
         setVoucherStatus(prev => prev ? { ...prev, hasPdf: true } : null);
-      };
-    } catch (err) {
-      console.error(err);
-      toast({ variant: "destructive", title: "Error", description: "Fallo al archivar el archivo." });
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+
+        // Notificar a Google Apps Script en segundo plano (no bloquear el flujo)
+        notifyArchiveAction({
+          fila: voucherData.fila,
+          sheet: voucherData.sheet,
+          id: voucherData.id,
+          pdfUrl: `${window.location.origin}/vale?${new URLSearchParams(voucherData as any).toString()}`,
+        }).catch(() => {});
+      } catch (err) {
+        console.error(err);
+        toast({ variant: "destructive", title: "Error", description: "Fallo al archivar el archivo." });
+      } finally {
+        setIsSyncing(false);
+      }
+    };
 
   if (isChecking) {
     return (
@@ -196,7 +228,7 @@ function ValeContent() {
 
   const isSigned = voucherStatus && (voucherStatus.firmado || !!voucherStatus.motivoOmitido);
   const hasReceipt = !!voucherStatus?.comprobanteUrl;
-  const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
   const queryParams = new URLSearchParams(voucherData as any).toString();
   const signUrl = `${baseUrl}/firmar?${queryParams}`;
   const attachUrl = `${baseUrl}/adjuntar?${queryParams}`;
@@ -213,8 +245,8 @@ function ValeContent() {
     toast({ title: "Link de Comprobante", description: "Copiado al portapapeles." });
   };
 
-  return (
-    <div className="min-h-screen bg-zinc-100 p-4 md:p-10 flex flex-col items-center gap-6 print:bg-white print:p-0">
+    return (
+    <div className="min-h-screen bg-zinc-100 print:bg-white print:p-0">
       {isSigned && !hasDismissedModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 print:hidden">
           <Card className="w-full max-w-sm shadow-2xl border-none animate-in zoom-in duration-300">
@@ -232,87 +264,154 @@ function ValeContent() {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-3 justify-center print:hidden bg-white p-3 rounded-2xl shadow-xl border border-zinc-200 sticky top-4 z-40">
-        <Button onClick={handleDownloadPDF} disabled={isSavingPdf} variant="outline" className="h-11 px-5 border-zinc-300 font-bold text-sm shadow-sm">
-          {isSavingPdf ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Download className="w-4 h-4 mr-2 text-indigo-600" />}
-          PDF Profesional
-        </Button>
-        <Button variant="outline" onClick={() => window.print()} className="h-11 px-5 border-zinc-300 font-bold text-sm">
-          <Printer className="w-4 h-4 mr-2 text-emerald-600" />
-          Imprimir
-        </Button>
-        {isSigned && !voucherStatus?.hasPdf && (
-           <Button onClick={handleArchiveVoucher} disabled={isSyncing} className="h-11 px-5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg">
-           {isSyncing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />}
-           Finalizar y Archivar
-         </Button>
-        )}
-      </div>
+      {/* Layout: 15% left sidebar + 85% right content */}
+      <div className="flex flex-row min-h-screen print:block">
+        
+        {/* ===== PANEL IZQUIERDO (15%) - QRs y Acciones ===== */}
+        <div className="w-[15%] min-w-[180px] max-w-[240px] bg-white border-r border-zinc-200 p-3 flex flex-col gap-3 print:hidden overflow-y-auto sticky top-0 h-screen">
+          
+          {/* Encabezado pequeño */}
+          <div className="text-center pb-2 border-b border-zinc-100">
+            <p className="text-[9px] font-black text-primary uppercase tracking-wider">Flynet</p>
+            <p className="text-[7px] text-muted-foreground font-bold">Vale #{voucherData.numVale}</p>
+          </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-[850px] print:hidden">
-        <Card className="border-2 border-dashed border-zinc-300 bg-white/50 cursor-pointer hover:bg-white transition-colors" onClick={handleCopySignLink}>
-          <CardContent className="p-6 flex flex-col items-center text-center gap-4">
-            <div className="flex items-center gap-2 text-zinc-600 font-bold uppercase text-xs">
-              <Signature className="w-4 h-4" /> 1. Firma del Recibido
-            </div>
-            {isSigned ? (
-              <div className="py-8 flex flex-col items-center gap-2 text-emerald-600">
-                <CheckCircle2 className="w-12 h-12" />
-                <span className="font-black text-sm uppercase">Firma Registrada</span>
+          {/* QR 1: Firma */}
+          <Card className="border border-zinc-200 shadow-sm cursor-pointer hover:border-primary/40 transition-colors" onClick={handleCopySignLink}>
+            <CardContent className="p-3 flex flex-col items-center text-center gap-2">
+              <div className="flex items-center gap-1.5 text-zinc-600 font-bold uppercase" style={{ fontSize: "7px" }}>
+                <Signature className="w-3 h-3" /> Firma
               </div>
-            ) : (
-              <>
-                <div className="bg-white p-2 rounded-lg border shadow-inner">
-                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(signUrl)}`} alt="QR Firma" className="w-32 h-32" />
+              {isSigned ? (
+                <div className="flex flex-col items-center gap-1 text-emerald-600 py-2">
+                  <CheckCircle2 className="w-6 h-6" />
+                  <span className="font-black" style={{ fontSize: "8px" }}>REGISTRADA</span>
                 </div>
-                <p className="text-[10px] text-muted-foreground leading-tight">Haz clic para copiar link de firma o escanea QR.</p>
-              </>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <>
+                                    <div className="bg-white rounded border shadow-sm w-full flex justify-center">
+                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(signUrl)}`} alt="QR Firma" className="w-[120px] h-[120px] max-w-full" />
+                  </div>
+                  <p className="text-muted-foreground" style={{ fontSize: "6.5px", lineHeight: 1.2 }}>Copiar link o escanear QR</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
 
-        <Card className="border-2 border-dashed border-zinc-300 bg-white/50 cursor-pointer hover:bg-white transition-colors" onClick={handleCopyAttachLink}>
-          <CardContent className="p-6 flex flex-col items-center text-center gap-4">
-            <div className="flex items-center gap-2 text-zinc-600 font-bold uppercase text-xs">
-              <Camera className="w-4 h-4" /> 2. Adjuntar Ticket
-            </div>
-            {hasReceipt ? (
-              <div className="py-8 flex flex-col items-center gap-2 text-amber-600">
-                <CheckCircle2 className="w-12 h-12" />
-                <span className="font-black text-sm uppercase">Ticket Cargado</span>
+          {/* QR 2: Ticket */}
+          <Card className="border border-zinc-200 shadow-sm cursor-pointer hover:border-primary/40 transition-colors" onClick={handleCopyAttachLink}>
+            <CardContent className="p-3 flex flex-col items-center text-center gap-2">
+              <div className="flex items-center gap-1.5 text-zinc-600 font-bold uppercase" style={{ fontSize: "7px" }}>
+                <Camera className="w-3 h-3" /> Ticket
               </div>
-            ) : (
-              <>
-                <div className="bg-white p-2 rounded-lg border shadow-inner">
-                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(attachUrl)}`} alt="QR Adjuntar" className="w-32 h-32" />
+              {hasReceipt ? (
+                <div className="flex flex-col items-center gap-1 text-amber-600 py-2">
+                  <CheckCircle2 className="w-6 h-6" />
+                  <span className="font-black" style={{ fontSize: "8px" }}>CARGADO</span>
                 </div>
-                <p className="text-[10px] text-muted-foreground leading-tight">Haz clic para copiar link de ticket o escanea QR.</p>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+              ) : (
+                <>
+                                    <div className="bg-white rounded border shadow-sm w-full flex justify-center">
+                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(attachUrl)}`} alt="QR Adjuntar" className="w-[120px] h-[120px] max-w-full" />
+                  </div>
+                  <p className="text-muted-foreground" style={{ fontSize: "6.5px", lineHeight: 1.2 }}>Copiar link o escanear QR</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
 
-      <div className="bg-white p-1 rounded-xl shadow-2xl print:shadow-none transition-all" id="vale-imprimible">
-        <VoucherCard 
-          id={voucherStatus?.id || voucherData.id}
-          fecha={voucherData.fecha}
-          entregado={voucherData.entregado}
-          rubro={voucherData.rubro}
-          concepto={voucherStatus?.concepto || voucherData.concepto}
-          numVale={voucherData.numVale}
-          monto={voucherStatus?.monto || voucherData.monto}
-          sucursal={voucherData.sucursal}
-          sheet={voucherData.sheet}
-          signatureUrl={voucherStatus?.firmaUrl}
-          comprobanteUrl={voucherStatus?.comprobanteUrl}
-          motivoOmitido={voucherStatus?.motivoOmitido}
-          autorizadoPor={voucherStatus?.autorizadoPor}
-        />
+          {/* Separador */}
+          <div className="border-t border-zinc-100 pt-2 mt-1"></div>
+
+          {/* Botones de acción compactos */}
+          <Button 
+            onClick={handleDownloadPDF} 
+            disabled={isSavingPdf} 
+            variant="outline" 
+            className="w-full h-8 border-zinc-300 font-bold shadow-sm"
+            style={{ fontSize: "9px" }}
+          >
+            {isSavingPdf ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Download className="w-3 h-3 mr-1 text-indigo-600" />}
+            PDF
+          </Button>
+          
+          <Button 
+            variant="outline" 
+            onClick={() => window.print()} 
+            className="w-full h-8 border-zinc-300 font-bold"
+            style={{ fontSize: "9px" }}
+          >
+            <Printer className="w-3 h-3 mr-1 text-emerald-600" />
+            Imprimir
+          </Button>
+
+          {isSigned && !voucherStatus?.hasPdf && (
+            <Button 
+              onClick={handleArchiveVoucher} 
+              disabled={isSyncing} 
+              className="w-full h-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-sm"
+              style={{ fontSize: "9px" }}
+            >
+              {isSyncing ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <ShieldCheck className="w-3 h-3 mr-1" />}
+              Archivar
+            </Button>
+          )}
+
+          {/* Estado */}
+          <div className="mt-auto pt-2 border-t border-zinc-100">
+            <div className="flex items-center gap-1.5" style={{ fontSize: "7px" }}>
+              <QrCode className="w-2.5 h-2.5 text-muted-foreground" />
+              <span className="text-muted-foreground font-bold uppercase">
+                {isSigned ? "Firmado" : "Pendiente"}
+              </span>
+            </div>
+            <p className="text-[6px] text-muted-foreground mt-0.5">
+              {voucherData.sucursal} · {voucherData.sheet}
+            </p>
+          </div>
+        </div>
+
+        {/* ===== PANEL DERECHO (85%) - Vale Compacto ===== */}
+        <div className="flex-1 p-4 md:p-6 flex items-start justify-center print:p-0 print:block">
+          <div className="print:hidden" style={{ transform: 'scale(0.82)', transformOrigin: 'top center' }}>
+            <div className="bg-white rounded-xl shadow-2xl print:shadow-none transition-all overflow-hidden" id="vale-imprimible">
+              <VoucherCard 
+                id={voucherStatus?.id || voucherData.id}
+                fecha={voucherData.fecha}
+                entregado={voucherData.entregado}
+                rubro={voucherData.rubro}
+                concepto={voucherStatus?.concepto || voucherData.concepto}
+                numVale={voucherData.numVale}
+                monto={voucherStatus?.monto || voucherData.monto}
+                sucursal={voucherData.sucursal}
+                sheet={voucherData.sheet}
+                signatureUrl={voucherStatus?.firmaUrl}
+                comprobanteUrl={voucherStatus?.comprobanteUrl}
+                motivoOmitido={voucherStatus?.motivoOmitido}
+                autorizadoPor={voucherStatus?.autorizadoPor}
+              />
+            </div>
+          </div>
+          {/* Versión sin escala para impresión */}
+          <div className="hidden print:block">
+            <VoucherCard 
+              id={voucherStatus?.id || voucherData.id}
+              fecha={voucherData.fecha}
+              entregado={voucherData.entregado}
+              rubro={voucherData.rubro}
+              concepto={voucherStatus?.concepto || voucherData.concepto}
+              numVale={voucherData.numVale}
+              monto={voucherStatus?.monto || voucherData.monto}
+              sucursal={voucherData.sucursal}
+              sheet={voucherData.sheet}
+              signatureUrl={voucherStatus?.firmaUrl}
+              comprobanteUrl={voucherStatus?.comprobanteUrl}
+              motivoOmitido={voucherStatus?.motivoOmitido}
+              autorizadoPor={voucherStatus?.autorizadoPor}
+            />
+          </div>
+        </div>
       </div>
-      <p className="text-[11px] text-muted-foreground font-bold uppercase tracking-widest pb-10 print:hidden flex items-center gap-2">
-        <QrCode className="w-3 h-3" /> Control de Flujo Digital v5.0 • Flynet
-      </p>
     </div>
   );
 }

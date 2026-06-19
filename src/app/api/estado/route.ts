@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { type VoucherRecord, getCycleFromDate, normalizeId, formatVoucherForApi } from '@/app/actions/vouchers';
+import { type VoucherRecord, normalizeId, formatVoucherForApi } from '@/app/actions/vouchers';
+import { getCycleFromDate } from '@/lib/cycles';
 
 const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
 
@@ -58,7 +59,7 @@ export async function GET(request: NextRequest) {
 
       // Si el script envía fecha, la usamos para ir directo a la carpeta correcta
       if (rawFecha) {
-        const cycle = await getCycleFromDate(rawFecha);
+        const cycle = getCycleFromDate(rawFecha);
         cycleId = cycle.id;
         year = cycle.year.toString();
       } else {

@@ -51,6 +51,38 @@ export function getRecentCycles(): CycleInfo[] {
   return cycles;
 }
 
+/**
+ * Calcula el ciclo contable de Flynet (20 al 19) a partir de una fecha.
+ * Útil para determinar dónde guardar/buscar un voucher según su fecha.
+ */
+export function getCycleFromDate(dateStr: string): { year: number; id: string } {
+  try {
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) throw new Error("Formato de fecha inválido");
+    
+    let year = parseInt(parts[0], 10);
+    let month = parseInt(parts[1], 10) - 1; 
+    const day = parseInt(parts[2], 10);
+
+    if (day < 20) {
+      if (month === 0) {
+        month = 11;
+        year--;
+      } else {
+        month--;
+      }
+    }
+    
+    return {
+      year,
+      id: `${year}-${(month + 1).toString().padStart(2, '0')}`
+    };
+  } catch (e) {
+    const current = getCurrentCycle();
+    return { year: current.year, id: current.id };
+  }
+}
+
 function formatCycle(year: number, month: number): CycleInfo {
   const startDate = new Date(year, month, 20);
   const endDate = new Date(year, month + 1, 19);

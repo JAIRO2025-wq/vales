@@ -111,15 +111,60 @@ function AdjuntarContent() {
     }
   };
 
+    /**
+   * Convierte un data URI base64 a un objeto Blob para subir al servidor Python.
+   */
+  const base64ToBlob = (base64: string, type: string): Blob => {
+    const byteCharacters = atob(base64.split(',')[1]);
+    const byteArrays = [];
+    for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+      const slice = byteCharacters.slice(offset, offset + 512);
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      byteArrays.push(new Uint8Array(byteNumbers));
+    }
+    return new Blob(byteArrays, { type });
+  };
+
   const handleUpload = async () => {
     if (!preview) return;
     setIsUploading(true);
-    setProgress(20);
+    setProgress(10);
     try {
-      // Guardamos localmente (Server Action) - El preview ya es la versión comprimida
+      // ===== PASO 1: Subir imagen al servidor Python =====
+      setProgress(20);
+      const pythonBaseUrl = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+      const blob = base64ToBlob(preview, 'image/jpeg');
+      const formData = new FormData();
+      const fileName = `vale_${voucherInfo.numVale}_comprobante_${Date.now()}.jpg`;
+      formData.append('file', blob, fileName);
+
+      const uploadResponse = await fetch(`${pythonBaseUrl}/upload-comprobante/${voucherInfo.id}`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Error al subir comprobante al servidor Python');
+      }
+
+      const uploadData = await uploadResponse.json();
+      
+      if (!uploadData.success) {
+        throw new Error(uploadData.error || 'Error del servidor Python');
+      }
+
+      // Ruta que devuelve el servidor Python (ej: /storage/imagenes/vale123_comprobante_123456.png)
+      const pythonImagePath = uploadData.image_url;
+
+      setProgress(50);
+
+      // ===== PASO 2: Guardar SOLO la ruta en el JSON local =====
       const saveResult = await saveVoucherAction({
         ...voucherInfo,
-        comprobanteUrl: preview,
+        comprobanteUrl: pythonImagePath,
         timestamp: new Date().toISOString()
       } as any);
 
@@ -127,12 +172,12 @@ function AdjuntarContent() {
         throw new Error(saveResult.error);
       }
 
-      setProgress(50);
+      setProgress(70);
       const baseUrl = window.location.origin;
       const params = new URLSearchParams(voucherInfo as any);
       const viewLink = `${baseUrl}/vale?${params.toString()}`;
 
-      // Enviamos a Google Sheets
+      // ===== PASO 3: Enviar a Google Sheets =====
       await fetch(CONFIG.API_URL, {
         method: "POST",
         mode: "no-cors",
@@ -141,7 +186,7 @@ function AdjuntarContent() {
           fila: voucherInfo.fila,
           sheet: voucherInfo.sheet,
           id: voucherInfo.id,
-          comprobante: preview,
+          comprobante: pythonImagePath,
           comprobanteUrl: viewLink,
           numVale: voucherInfo.numVale,
           metodo: "updateComprobante"
@@ -149,7 +194,7 @@ function AdjuntarContent() {
       });
       setProgress(100);
       setIsSuccess(true);
-      toast({ title: "Enviado", description: "Comprobante sincronizado." });
+      toast({ title: "Enviado", description: "Comprobante sincronizado en el servidor Python." });
     } catch (err: any) {
       console.error(err);
       toast({ 

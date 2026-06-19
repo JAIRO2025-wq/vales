@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
 import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
-import { getVouchersByCycleAction, formatVoucherForApi, type FormattedVoucher } from "@/app/actions/vouchers";
+import { getVouchersByCycleAction, formatVoucherForApi, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import { useToast } from "@/hooks/use-toast";
 import { 
   LayoutDashboard, 
@@ -26,7 +26,11 @@ import {
   FileCheck,
   Receipt,
   Loader2,
-  Archive
+  Archive,
+  Trash2,
+  Eraser,
+  ImageOff,
+  AlertTriangle
 } from "lucide-react";
 
 function AdminContent() {
@@ -95,6 +99,20 @@ function AdminContent() {
     window.open(`/vale?${params.toString()}`, '_blank');
   };
 
+    /**
+   * Construye la URL para que el servidor Python descargue la imagen directamente.
+   */
+  const buildImageUrl = (filePath: string | undefined, fecha: string): string | null => {
+    if (!filePath) return null;
+    if (filePath.startsWith('data:')) return filePath;
+    if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+    if (filePath.startsWith('imagenes/') || filePath.startsWith('pdfs/')) {
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      return `${origin}/api/imagenes?fecha=${encodeURIComponent(fecha)}&file=${encodeURIComponent(filePath)}`;
+    }
+    return filePath;
+  };
+
   const getPayload = (voucher: any) => {
     const sheetUpper = (voucher.sheet || "").toUpperCase();
     const isCajaChica = sheetUpper.includes("CHICA") || sheetUpper === "HOJA 1" || sheetUpper.includes("GENERAL");
@@ -118,8 +136,12 @@ function AdminContent() {
       reintegro: "0.00",
       solicitante: voucher.entregado,
       autoriza: voucher.autorizadoPor || voucher.sucursal,
-      firmaSolicitante: voucher.firmaUrl || null,
-      comprobante: voucher.comprobanteUrl || null
+            // Enviamos URL al servidor Python en vez de base64 enorme
+      // Usamos firmaUrlRaw/comprobanteUrlRaw (rutas originales del storage)
+      // para construir URLs completas que el servidor Python pueda descargar
+      firmaSolicitante: buildImageUrl(voucher.firmaUrlRaw ?? voucher.firmaUrl, voucher.fecha),
+      comprobante: buildImageUrl(voucher.comprobanteUrlRaw ?? voucher.comprobanteUrl, voucher.fecha),
+      fechaImagen: voucher.fecha
     };
   };
 
@@ -440,13 +462,74 @@ function AdminContent() {
                           >
                             <Eye className="w-4 h-4" />
                           </Button>
-                          <Button 
+                                                    <Button 
                             variant="ghost" 
                             size="icon" 
                             className="h-8 w-8"
                             onClick={() => exportSinglePDF(vale.raw)}
                           >
                             <Download className="w-4 h-4" />
+                          </Button>
+                          {vale.firmado && (
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
+                              title="Eliminar firma"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!confirm('¿Eliminar la firma de este vale?')) return;
+                                const result = await deleteSignatureAction(vale.id, vale.raw.fecha);
+                                if (result.success) {
+                                  toast({ title: 'Firma eliminada' });
+                                  loadData();
+                                } else {
+                                  toast({ variant: 'destructive', title: 'Error', description: result.error });
+                                }
+                              }}
+                            >
+                              <Eraser className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                          {vale.comprobante && (
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              className="h-8 w-8 text-amber-600 hover:text-amber-800 hover:bg-amber-50"
+                              title="Eliminar comprobante"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!confirm('¿Eliminar el comprobante/ticket de este vale?')) return;
+                                const result = await deleteComprobanteAction(vale.id, vale.raw.fecha);
+                                if (result.success) {
+                                  toast({ title: 'Comprobante eliminado' });
+                                  loadData();
+                                } else {
+                                  toast({ variant: 'destructive', title: 'Error', description: result.error });
+                                }
+                              }}
+                            >
+                              <ImageOff className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-red-600 hover:text-red-800 hover:bg-red-50"
+                            title="Eliminar vale completo"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!confirm('⚠️ ¿ELIMINAR COMPLETAMENTE este vale?\n\nSe borrará el registro y todos sus archivos (firma, comprobante, PDF).\n\nEsta acción no se puede deshacer.')) return;
+                              const result = await deleteVoucherAction(vale.id, vale.raw.fecha);
+                              if (result.success) {
+                                toast({ title: 'Vale eliminado', description: 'Registro y archivos borrados.' });
+                                loadData();
+                              } else {
+                                toast({ variant: 'destructive', title: 'Error', description: result.error });
+                              }
+                            }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </Button>
                         </div>
                       </TableCell>

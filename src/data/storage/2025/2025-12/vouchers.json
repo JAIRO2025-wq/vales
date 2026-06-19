@@ -1,0 +1,20 @@
+[
+  {
+    "fila": "62",
+    "sheet": "CLIENTES",
+    "id": "MORAZAN-2025-12-W4-CLIENTES-F62",
+    "fecha": "2025-12-26",
+    "entregado": "Cliente",
+    "rubro": "Varios",
+    "concepto": "Reposicion caja chica #2",
+    "numVale": "2",
+    "monto": "1800",
+    "sucursal": "MORAZAN",
+    "firmado": true,
+    "timestamp": "2026-06-19T17:02:59.521Z",
+    "firmaUrl": "/storage/imagenes/MORAZAN-2025-12-W4-CLIENTES-F62_firma_1781888615.png",
+    "autorizadoPor": "JOSE JUANA",
+    "comprobanteUrl": "/storage/imagenes/MORAZAN-2025-12-W4-CLIENTES-F62_comprobante_1781888638.png",
+    "hasPdf": true
+  }
+]

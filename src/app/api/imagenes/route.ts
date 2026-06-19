@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Calcular el ciclo contable desde la fecha
-    const cycle = await getCycleFromDate(fecha);
+    const cycle = getCycleFromDate(fecha);
     const fullPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, filePath);
 
     // Security: evitar directory traversal

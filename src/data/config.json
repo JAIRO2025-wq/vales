@@ -12,7 +12,7 @@
       "branch": "MORAZAN"
     }
   },
-  "EMPRESA": "FLYNET S.A. de C.V.",
+  "EMPRESA": "NETPLAY S.A. de C.V.",
   "LOGO_URL": "/logo.svg",
   "SUCURSALES": [
     "SAN MIGUEL",
@@ -26,5 +26,5 @@
     "Instalaciones",
     "Otros Gastos"
   ],
-  "PDF_API_URL": "https://vales001.modulos.uk"
+  "PDF_API_URL": "https://servervale.modulos.uk/"
 }

@@ -10,7 +10,9 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   // El evento fetch es obligatorio para que Chrome considere la app como instalable
-  event.respondWith(fetch(event.request).catch(() => {
-    return caches.match(event.request);
-  }));
+  event.respondWith(
+    fetch(event.request)
+      .catch(() => caches.match(event.request))
+      .then(response => response || new Response('Offline', { status: 503 }))
+  );
 });
