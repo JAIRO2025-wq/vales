@@ -6,19 +6,26 @@ export const configData = {
       "role": "CAJERA",
       "branch": "SAN MIGUEL"
     },
-    "JOSE JUANA": {
-      "pin": "8888",
+    "JESSICA HERNANDEZ": {
+      "pin": "1414",
       "role": "CAJERA",
       "branch": "MORAZAN"
+    },
+    "KATHERINE ELIZABETH VANEGAS DIAZ": {
+      "pin": "1111",
+      "role": "CAJERA",
+      "branch": "CARA SUCIA"
     }
   },
-  "EMPRESA": "NETPLAY S.A. de C.V.",
+  "EMPRESA": "FLYNET SA DE CV",
   "LOGO_URL": "/logo.svg",
   "SUCURSALES": [
     "SAN MIGUEL",
     "USULUTAN",
-    "LA UNION",
-    "MORAZAN"
+    "MORAZAN",
+    "CARA SUCIA",
+    "SAN VICENTE",
+    "SAN SEBASTIAN"
   ],
   "TIPOS_CAJA": [
     "Caja chica",
