@@ -10,7 +10,13 @@ export interface CycleInfo {
 }
 
 /**
- * Calcula el ciclo actual basado en la fecha de hoy
+ * Calcula el ciclo actual basado en la fecha de hoy.
+ * El ciclo de Flynet va del 20 de un mes al 19 del siguiente.
+ * 
+ * Ejemplos:
+ * - 22 de junio → ciclo Jun 20 - Jul 19 (id: 2026-06)
+ * - 15 de junio → ciclo May 20 - Jun 19 (id: 2026-05)
+ * - 20 de junio → ciclo Jun 20 - Jul 19 (id: 2026-06)
  */
 export function getCurrentCycle(): CycleInfo {
   const now = new Date();
@@ -27,6 +33,7 @@ export function getCurrentCycle(): CycleInfo {
       month--;
     }
   }
+  // Si es día 20 o más, el ciclo empieza en ESTE mes (ya estamos en el nuevo ciclo)
 
   return formatCycle(year, month);
 }

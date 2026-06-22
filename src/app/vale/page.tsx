@@ -358,16 +358,30 @@ function ValeContent() {
           )}
 
           {/* Estado */}
-          <div className="mt-auto pt-2 border-t border-zinc-100">
+          <div className="mt-auto pt-2 border-t border-zinc-100 space-y-1.5">
             <div className="flex items-center gap-1.5" style={{ fontSize: "7px" }}>
               <QrCode className="w-2.5 h-2.5 text-muted-foreground" />
               <span className="text-muted-foreground font-bold uppercase">
                 {isSigned ? "Firmado" : "Pendiente"}
               </span>
             </div>
-            <p className="text-[6px] text-muted-foreground mt-0.5">
+            <p className="text-[6px] text-muted-foreground">
               {voucherData.sucursal} · {voucherData.sheet}
             </p>
+            {voucherStatus?.firmaMeta && (
+              <div className="bg-indigo-50/50 rounded p-1.5 border border-indigo-100 space-y-0.5">
+                <p className="text-[6px] font-black text-indigo-600 uppercase tracking-wider">Datos de Firma</p>
+                <p className="text-[7px] text-indigo-900 font-bold">
+                  {voucherStatus.firmaMeta.esMovil ? '📱' : '🖥️'} {new Date(voucherStatus.firmaMeta.fechaHora).toLocaleDateString('es-SV', { day: '2-digit', month: '2-digit', year: '2-digit' })} · {new Date(voucherStatus.firmaMeta.fechaHora).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+                <p className="text-[6px] text-indigo-500 capitalize truncate">
+                  {voucherStatus.firmaMeta.plataforma}{voucherStatus.firmaMeta.tipoConexion ? ` · ${voucherStatus.firmaMeta.tipoConexion.toUpperCase()}` : ''}
+                </p>
+                <p className="text-[6px] text-indigo-400 truncate">
+                  {voucherStatus.firmaMeta.zonaHoraria} · {voucherStatus.firmaMeta.idioma}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

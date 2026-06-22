@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SignatureCanvas } from "@/components/firma/SignatureCanvas";
 import { CONFIG } from "@/lib/config";
 import { useToast } from "@/hooks/use-toast";
-import { saveVoucherAction, checkVoucherStatusAction } from "@/app/actions/vouchers";
+import { saveVoucherAction, checkVoucherStatusAction, type FirmaMetadata } from "@/app/actions/vouchers";
 import { verifyPinAction } from "@/app/actions/config";
 import { 
   Lock, 
@@ -38,6 +38,7 @@ function FirmaContent() {
   const [motivo, setMotivo] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [capturedMetadata, setCapturedMetadata] = useState<FirmaMetadata | null>(null);
 
   const voucherData = {
     fila: searchParams.get("fila") || "",
@@ -108,6 +109,34 @@ function FirmaContent() {
     return new Blob(byteArrays, { type });
   };
 
+  /**
+   * Recolecta metadatos del dispositivo que está firmando.
+   * Solo usa APIs que NO requieren permisos del usuario.
+   */
+  const collectDeviceMetadata = (): FirmaMetadata => {
+    const ua = navigator.userAgent;
+    const esMovil = /Android|iPhone|iPad|iPod|webOS/i.test(ua);
+    
+    let tipoConexion: string | undefined;
+    try {
+      // navigator.connection no está en todos los navegadores
+      const conn = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
+      if (conn?.effectiveType) {
+        tipoConexion = conn.effectiveType; // 'slow-2g', '2g', '3g', '4g', 'wifi', etc.
+      }
+    } catch {}
+
+    return {
+      fechaHora: new Date().toISOString(),
+      plataforma: navigator.platform || 'Desconocida',
+      userAgent: ua,
+      zonaHoraria: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Desconocida',
+      idioma: navigator.language || 'Desconocido',
+      tipoConexion,
+      esMovil,
+    };
+  };
+
   const handleAction = async (signatureBase64?: string, skipMotivo?: string) => {
     setIsSubmitting(true);
     try {
@@ -172,13 +201,16 @@ function FirmaContent() {
       }
 
       // ===== PASO 2: Guardar SOLO la ruta en el JSON local =====
+      const metadata = collectDeviceMetadata();
+      setCapturedMetadata(metadata);
       await saveVoucherAction({
         ...voucherData,
         firmado: !skipMotivo,
         firmaUrl: firmaPath,
         motivoOmitido: skipMotivo,
-        timestamp: new Date().toISOString(),
-        autorizadoPor: authorizedUser?.name
+        timestamp: metadata.fechaHora,
+        autorizadoPor: authorizedUser?.name,
+        firmaMeta: metadata,
       });
       
       try {
@@ -241,6 +273,46 @@ function FirmaContent() {
             <CheckCircle2 className="w-16 h-16 text-green-600 mx-auto" />
             <h2 className="text-3xl font-bold font-headline text-primary">¡Procesado!</h2>
             <p className="text-muted-foreground">La información ha sido enviada con éxito.</p>
+            
+            {capturedMetadata && (
+              <div className="bg-zinc-50 rounded-xl border p-4 text-left space-y-2">
+                <p className="text-[10px] font-black text-muted-foreground uppercase tracking-wider">Datos de Auditoría</p>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-muted-foreground">Fecha/Hora:</span>
+                    <p className="font-bold text-primary">
+                      {new Date(capturedMetadata.fechaHora).toLocaleString('es-SV', { 
+                        dateStyle: 'medium', 
+                        timeStyle: 'medium' 
+                      })}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Dispositivo:</span>
+                    <p className="font-bold text-primary capitalize">{capturedMetadata.esMovil ? '📱 Móvil' : '🖥️ Escritorio'}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Plataforma:</span>
+                    <p className="font-bold text-primary truncate">{capturedMetadata.plataforma}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Zona Horaria:</span>
+                    <p className="font-bold text-primary truncate">{capturedMetadata.zonaHoraria}</p>
+                  </div>
+                  {capturedMetadata.tipoConexion && (
+                    <div>
+                      <span className="text-muted-foreground">Conexión:</span>
+                      <p className="font-bold text-primary uppercase">{capturedMetadata.tipoConexion}</p>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-muted-foreground">Idioma:</span>
+                    <p className="font-bold text-primary">{capturedMetadata.idioma}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             <Button className="w-full h-12 text-lg font-bold" variant="outline" onClick={() => window.close()}>Finalizar</Button>
           </CardContent>
         </Card>
@@ -253,14 +325,28 @@ function FirmaContent() {
       <Card className="w-full shadow-2xl border-2">
         <CardHeader className="bg-primary/5 border-b p-6">
           <div className="flex justify-between items-start">
-            <div>
-              <CardTitle className="font-headline text-xl">
-                {showSkipForm ? "Autorización Especial" : `Firma Vale #${voucherData.numVale}`}
-              </CardTitle>
-              <CardDescription>Sede: {voucherData.sucursal} • Para: {voucherData.entregado}</CardDescription>
+            <div className="space-y-3">
+              <div>
+                <CardTitle className="font-headline text-xl">
+                  {showSkipForm ? "Autorización Especial" : `Firma Vale #${voucherData.numVale}`}
+                </CardTitle>
+                <CardDescription>Sede: {voucherData.sucursal} • Para: {voucherData.entregado}</CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <div className="bg-white/80 rounded-lg px-3 py-2 border shadow-sm">
+                  <span className="text-[10px] font-bold text-muted-foreground uppercase block">Monto</span>
+                  <span className="text-lg font-black text-primary font-headline">${parseFloat(voucherData.monto).toFixed(2)}</span>
+                </div>
+                {voucherData.concepto && (
+                  <div className="bg-white/80 rounded-lg px-3 py-2 border shadow-sm flex-1 min-w-[150px]">
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase block">Concepto</span>
+                    <span className="text-sm font-semibold text-foreground line-clamp-2">{voucherData.concepto}</span>
+                  </div>
+                )}
+              </div>
             </div>
             {authorizedUser && (
-              <div className="bg-primary/10 px-3 py-1 rounded-full flex items-center gap-2">
+              <div className="bg-primary/10 px-3 py-1 rounded-full flex items-center gap-2 shrink-0">
                 <UserCheck className="w-4 h-4 text-primary" />
                 <span className="text-[10px] font-bold text-primary">{authorizedUser.role}</span>
               </div>

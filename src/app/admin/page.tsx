@@ -38,8 +38,8 @@ function AdminContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   
-  const [cycles] = useState<CycleInfo[]>(getRecentCycles());
-  const [selectedCycle, setSelectedCycle] = useState<string>(cycles[0].id);
+  const [cycles, setCycles] = useState<CycleInfo[]>([]);
+  const [selectedCycle, setSelectedCycle] = useState<string>("");
   const [vales, setVales] = useState<FormattedVoucher[]>([]);
   const [loading, setLoading] = useState(true);
   const [isBatchExporting, setIsBatchExporting] = useState<string | null>(null);
@@ -48,8 +48,14 @@ function AdminContent() {
   const [filterSucursal, setFilterSucursal] = useState("TODAS");
   const [filterCaja, setFilterCaja] = useState("TODAS");
   const [filterSearch, setFilterSearch] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 15;
 
   useEffect(() => {
+    // Calcular ciclos SIEMPRE en el cliente para evitar desfases de zona horaria del servidor
+    const recentCycles = getRecentCycles();
+    setCycles(recentCycles);
+    setSelectedCycle(recentCycles[0]?.id || "");
     setMounted(true);
   }, []);
 
@@ -78,10 +84,15 @@ function AdminContent() {
   };
 
   useEffect(() => {
-    if (mounted) {
+    if (mounted && selectedCycle) {
       loadData();
     }
   }, [selectedCycle, mounted]);
+
+  // Resetear página al cambiar filtros o ciclo
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterSucursal, filterCaja, filterSearch, selectedCycle]);
 
   const handleViewVale = (vale: FormattedVoucher) => {
     const params = new URLSearchParams();
@@ -228,31 +239,62 @@ function AdminContent() {
     if (filterCaja === "INSTALACIONES") matchesCaja = sheet.includes("INSTALACIONES");
     if (filterCaja === "OTROS GASTOS") matchesCaja = sheet.includes("OTROS");
 
-    const matchesSearch = v.raw.entregado.toLowerCase().includes(filterSearch.toLowerCase()) || 
-                          v.raw.rubro.toLowerCase().includes(filterSearch.toLowerCase()) ||
-                          (v.raw.concepto && v.raw.concepto.toLowerCase().includes(filterSearch.toLowerCase())) ||
-                          v.raw.numVale.includes(filterSearch);
-    
+    const searchTerm = filterSearch.toLowerCase().trim();
+    const matchesSearch = !searchTerm || (
+      v.raw.entregado.toLowerCase().includes(searchTerm) ||
+      v.raw.rubro.toLowerCase().includes(searchTerm) ||
+      (v.raw.concepto && v.raw.concepto.toLowerCase().includes(searchTerm)) ||
+      v.raw.numVale.includes(searchTerm) ||
+      v.raw.fecha.includes(searchTerm) ||
+      v.raw.monto.includes(searchTerm) ||
+      v.raw.sucursal.toLowerCase().includes(searchTerm) ||
+      v.raw.sheet.toLowerCase().includes(searchTerm) ||
+      v.id.toLowerCase().includes(searchTerm) ||
+      (v.raw.autorizadoPor && v.raw.autorizadoPor.toLowerCase().includes(searchTerm)) ||
+      (v.raw.motivoOmitido && v.raw.motivoOmitido.toLowerCase().includes(searchTerm)) ||
+      // Buscar por metadata de firma
+      (v.raw.firmaMeta && (
+        v.raw.firmaMeta.plataforma.toLowerCase().includes(searchTerm) ||
+        v.raw.firmaMeta.zonaHoraria.toLowerCase().includes(searchTerm) ||
+        v.raw.firmaMeta.idioma.toLowerCase().includes(searchTerm) ||
+        (v.raw.firmaMeta.tipoConexion && v.raw.firmaMeta.tipoConexion.toLowerCase().includes(searchTerm)) ||
+        v.raw.firmaMeta.fechaHora.includes(searchTerm)
+      ))
+    );
     return matchesSucursal && matchesCaja && matchesSearch;
   });
 
+  // Ordenar por número de vale (ascendente)
+  const sortedVales = [...filteredVales].sort((a, b) => {
+    const numA = parseInt(a.raw.numVale) || 0;
+    const numB = parseInt(b.raw.numVale) || 0;
+    return numA - numB;
+  });
+
+  // Paginación
+  const totalPages = Math.ceil(sortedVales.length / ITEMS_PER_PAGE);
+  const paginatedVales = sortedVales.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
   return (
-    <div className="p-4 md:p-8 space-y-8 max-w-7xl mx-auto pb-20">
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+    <div className="p-2 md:p-4 space-y-3 max-w-7xl mx-auto pb-20">
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
         <div>
-          <h1 className="text-3xl font-bold font-headline text-primary flex items-center gap-3">
-            <LayoutDashboard className="w-8 h-8" /> 
+          <h1 className="text-xl font-bold font-headline text-primary flex items-center gap-2">
+            <LayoutDashboard className="w-5 h-5" /> 
             Panel de Auditoría
           </h1>
-          <p className="text-muted-foreground">Ciclo contable y gestión de desembolsos.</p>
+          <p className="text-[10px] text-muted-foreground">Ciclo contable y gestión de desembolsos.</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="icon" onClick={loadData} disabled={loading}>
-            <RefreshCcw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        <div className="flex gap-1.5">
+          <Button variant="outline" size="icon" className="h-9 w-9" onClick={loadData} disabled={loading}>
+            <RefreshCcw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </Button>
           <Select value={selectedCycle} onValueChange={setSelectedCycle}>
-            <SelectTrigger className="w-[240px] h-12 border-2 border-primary/20">
-              <Calendar className="w-4 h-4 mr-2 text-primary" />
+            <SelectTrigger className="w-[220px] h-9 border-2 border-primary/20 text-xs">
+              <Calendar className="w-3.5 h-3.5 mr-1.5 text-primary" />
               <SelectValue placeholder="Ciclo" />
             </SelectTrigger>
             <SelectContent>
@@ -262,121 +304,121 @@ function AdminContent() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
         <Card className="border-l-4 border-l-primary shadow-sm bg-white">
-          <CardContent className="pt-6">
+          <CardContent className="py-2.5 px-3">
             <div className="flex justify-between items-center">
               <div>
-                <p className="text-[10px] font-black text-muted-foreground uppercase">Total Ciclo</p>
-                <p className="text-3xl font-black font-headline">{stats.total}</p>
+                <p className="text-[9px] font-black text-muted-foreground uppercase">Total Ciclo</p>
+                <p className="text-xl font-black font-headline">{stats.total}</p>
               </div>
-              <FileText className="w-8 h-8 text-primary/10" />
+              <FileText className="w-5 h-5 text-primary/10" />
             </div>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-emerald-600 shadow-sm bg-white">
-          <CardContent className="pt-6">
+          <CardContent className="py-2.5 px-3">
             <div className="flex justify-between items-center">
               <div>
-                <p className="text-[10px] font-black text-emerald-600 uppercase">Firmados</p>
-                <p className="text-3xl font-black font-headline text-emerald-700">{stats.firmados}</p>
+                <p className="text-[9px] font-black text-emerald-600 uppercase">Firmados</p>
+                <p className="text-xl font-black font-headline text-emerald-700">{stats.firmados}</p>
               </div>
-              <CheckCircle className="w-8 h-8 text-emerald-600/10" />
+              <CheckCircle className="w-5 h-5 text-emerald-600/10" />
             </div>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-amber-500 shadow-sm bg-white">
-          <CardContent className="pt-6">
+          <CardContent className="py-2.5 px-3">
             <div className="flex justify-between items-center">
               <div>
-                <p className="text-[10px] font-black text-amber-600 uppercase">Tickets</p>
-                <p className="text-3xl font-black font-headline text-amber-700">{stats.conTicket}</p>
+                <p className="text-[9px] font-black text-amber-600 uppercase">Tickets</p>
+                <p className="text-xl font-black font-headline text-amber-700">{stats.conTicket}</p>
               </div>
-              <Receipt className="w-8 h-8 text-amber-600/10" />
+              <Receipt className="w-5 h-5 text-amber-600/10" />
             </div>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-indigo-600 shadow-sm bg-white">
-          <CardContent className="pt-6">
+          <CardContent className="py-2.5 px-3">
             <div className="flex justify-between items-center">
               <div>
-                <p className="text-[10px] font-black text-indigo-600 uppercase">Gasto Total</p>
-                <p className="text-3xl font-black font-headline text-indigo-700">$ {stats.montoTotal.toFixed(2)}</p>
+                <p className="text-[9px] font-black text-indigo-600 uppercase">Gasto Total</p>
+                <p className="text-xl font-black font-headline text-indigo-700">$ {stats.montoTotal.toFixed(2)}</p>
               </div>
-              <TrendingUp className="w-8 h-8 text-indigo-600/10" />
+              <TrendingUp className="w-5 h-5 text-indigo-600/10" />
             </div>
           </CardContent>
         </Card>
       </div>
 
       <Card className="bg-muted/30 border-dashed border-2">
-        <CardHeader className="py-4">
-          <CardTitle className="text-sm font-bold flex items-center gap-2">
-            <Archive className="w-4 h-4" /> Acciones de Lote (Descarga ZIP)
+        <CardHeader className="py-1.5 px-3">
+          <CardTitle className="text-[11px] font-bold flex items-center gap-1.5">
+            <Archive className="w-3.5 h-3.5" /> Acciones de Lote (Descarga ZIP)
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-3 pb-4">
+        <CardContent className="flex flex-wrap gap-1.5 pb-2 px-3">
           <Button 
             variant="outline" 
             size="sm" 
-            className="bg-white"
+            className="bg-white h-7 text-[10px]"
             disabled={!!isBatchExporting}
             onClick={() => exportBatch("CHICA")}
           >
-            {isBatchExporting === "CHICA" ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : <Archive className="w-3 h-3 mr-2" />}
+            {isBatchExporting === "CHICA" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
             ZIP Caja Chica
           </Button>
           <Button 
             variant="outline" 
             size="sm" 
-            className="bg-white"
+            className="bg-white h-7 text-[10px]"
             disabled={!!isBatchExporting}
             onClick={() => exportBatch("CLIENTES")}
           >
-            {isBatchExporting === "CLIENTES" ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : <Archive className="w-3 h-3 mr-2" />}
+            {isBatchExporting === "CLIENTES" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
             ZIP Clientes
           </Button>
           <Button 
             variant="outline" 
             size="sm" 
-            className="bg-white"
+            className="bg-white h-7 text-[10px]"
             disabled={!!isBatchExporting}
             onClick={() => exportBatch("INSTALACIONES")}
           >
-            {isBatchExporting === "INSTALACIONES" ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : <Archive className="w-3 h-3 mr-2" />}
+            {isBatchExporting === "INSTALACIONES" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
             ZIP Instalaciones
           </Button>
           <Button 
             variant="outline" 
             size="sm" 
-            className="bg-white"
+            className="bg-white h-7 text-[10px]"
             disabled={!!isBatchExporting}
             onClick={() => exportBatch("OTROS")}
           >
-            {isBatchExporting === "OTROS" ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : <Archive className="w-3 h-3 mr-2" />}
+            {isBatchExporting === "OTROS" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
             ZIP Otros Gastos
           </Button>
         </CardContent>
       </Card>
 
       <Card className="shadow-xl">
-        <CardHeader className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 border-b">
-          <CardTitle className="font-headline text-xl text-primary">Registro de Actividad</CardTitle>
-          <div className="flex flex-wrap gap-2 w-full xl:w-auto">
-            <div className="relative min-w-[200px] flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <CardHeader className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-2 border-b py-2 px-3">
+          <CardTitle className="font-headline text-base text-primary">Registro de Actividad</CardTitle>
+          <div className="flex flex-wrap gap-1.5 w-full xl:w-auto">
+            <div className="relative min-w-[160px] flex-1">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
               <Input 
                 id="search-input-admin"
                 name="search"
-                placeholder="Buscar por nombre, rubro o N°..." 
-                className="pl-9 h-10 border-2"
+                placeholder="Buscar vale, fecha, monto, persona..." 
+                className="pl-8 h-8 border-2 text-xs"
                 value={filterSearch}
                 onChange={(e) => setFilterSearch(e.target.value)}
               />
             </div>
             <Select value={filterSucursal} onValueChange={setFilterSucursal}>
-              <SelectTrigger className="h-10 w-[160px] border-2">
-                <Building2 className="w-4 h-4 mr-2" />
+              <SelectTrigger className="h-8 w-[140px] border-2 text-xs">
+                <Building2 className="w-3.5 h-3.5 mr-1.5" />
                 <SelectValue placeholder="Sucursal" />
               </SelectTrigger>
               <SelectContent>
@@ -385,8 +427,8 @@ function AdminContent() {
               </SelectContent>
             </Select>
             <Select value={filterCaja} onValueChange={setFilterCaja}>
-              <SelectTrigger className="h-10 w-[160px] border-2">
-                <Receipt className="w-4 h-4 mr-2" />
+              <SelectTrigger className="h-8 w-[140px] border-2 text-xs">
+                <Receipt className="w-3.5 h-3.5 mr-1.5" />
                 <SelectValue placeholder="Tipo Caja" />
               </SelectTrigger>
               <SelectContent>
@@ -410,16 +452,17 @@ function AdminContent() {
                   <TableHead className="font-bold">Tipo de Caja</TableHead>
                   <TableHead className="font-bold text-right">Monto</TableHead>
                   <TableHead className="font-bold text-center">Estado</TableHead>
+                  <TableHead className="font-bold">Firma / Dispositivo</TableHead>
                   <TableHead className="text-right font-bold">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">Sincronizando registros...</TableCell>
+                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">Sincronizando registros...</TableCell>
                   </TableRow>
-                ) : filteredVales.length > 0 ? (
-                  filteredVales.map((vale) => (
+                ) : paginatedVales.length > 0 ? (
+                  paginatedVales.map((vale) => (
                     <TableRow 
                       key={vale.id} 
                       className="hover:bg-muted/10 cursor-pointer"
@@ -443,14 +486,37 @@ function AdminContent() {
                       </TableCell>
                       <TableCell className="font-black text-indigo-700 text-right">{vale.raw.monto}</TableCell>
                       <TableCell className="text-center">
-                        <div className="flex justify-center gap-1">
+                        <div className="flex justify-center gap-1 flex-wrap">
                           {vale.firmado ? (
                             <Badge className="bg-emerald-600 font-bold text-[9px]">FIRMADO</Badge>
                           ) : (
                             <Badge variant="outline" className="text-[9px] opacity-40">PENDIENTE</Badge>
                           )}
-                          {vale.comprobante && <Receipt className="w-4 h-4 text-amber-600" />}
+                          {vale.comprobante && <Receipt className="w-3.5 h-3.5 text-amber-600" title="Ticket adjunto" />}
+                          {vale.archivado && <FileCheck className="w-3.5 h-3.5 text-indigo-600" title="PDF archivado" />}
                         </div>
+                      </TableCell>
+                      <TableCell className="text-[9px] text-muted-foreground">
+                        {vale.raw.firmaMeta ? (
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1">
+                              {vale.raw.firmaMeta.esMovil ? '📱' : '🖥️'}
+                              <span className="font-bold text-foreground">
+                                {new Date(vale.raw.firmaMeta.fechaHora).toLocaleDateString('es-SV', { day: '2-digit', month: '2-digit' })}
+                                {' '}
+                                {new Date(vale.raw.firmaMeta.fechaHora).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <div className="text-[8px] capitalize truncate max-w-[120px]">
+                              {vale.raw.firmaMeta.plataforma}
+                              {vale.raw.firmaMeta.tipoConexion && ` · ${vale.raw.firmaMeta.tipoConexion.toUpperCase()}`}
+                            </div>
+                          </div>
+                        ) : vale.firmado ? (
+                          <span className="text-[9px] italic">Sin metadata</span>
+                        ) : (
+                          <span className="text-[9px] text-muted-foreground/50">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex justify-end gap-1">
@@ -537,19 +603,83 @@ function AdminContent() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-40 text-center text-muted-foreground">Sin registros que coincidan con los filtros.</TableCell>
+                    <TableCell colSpan={8} className="h-40 text-center text-muted-foreground">Sin registros que coincidan con los filtros.</TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </div>
+          {/* Paginación */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/10">
+              <span className="text-[10px] text-muted-foreground font-bold">
+                {sortedVales.length} vales · Página {currentPage} de {totalPages}
+              </span>
+              <div className="flex gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[10px]"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(1)}
+                >
+                  ««
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[10px]"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                >
+                  «
+                </Button>
+                {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                  // Mostrar ventana de 5 páginas centrada en la actual
+                  let start = Math.max(1, currentPage - 2);
+                  if (start + 4 > totalPages) start = Math.max(1, totalPages - 4);
+                  const pageNum = start + i;
+                  if (pageNum > totalPages) return null;
+                  return (
+                    <Button
+                      key={pageNum}
+                      variant={pageNum === currentPage ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 w-7 text-[10px] font-bold"
+                      onClick={() => setCurrentPage(pageNum)}
+                    >
+                      {pageNum}
+                    </Button>
+                  );
+                })}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[10px]"
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                >
+                  »
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[10px]"
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(totalPages)}
+                >
+                  »»
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      <footer className="flex justify-between items-center text-[10px] text-muted-foreground font-bold uppercase tracking-widest pt-4 border-t">
-        <span>Flynet Digital v4.7 • Otros Gastos Habilitado</span>
-        <div className="flex gap-4">
-          <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div> Sincronizado</span>
+      <footer className="flex justify-between items-center text-[9px] text-muted-foreground font-bold uppercase tracking-widest pt-2 pb-1 border-t">
+        <span>Flynet Digital v4.8</span>
+        <div className="flex gap-3">
+          <span className="flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> Sincronizado</span>
         </div>
       </footer>
     </div>

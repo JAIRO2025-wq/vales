@@ -26,6 +26,26 @@ export interface VoucherRecord {
   timestamp: string;
   autorizadoPor?: string;
   hasPdf?: boolean;
+  /** Metadatos del dispositivo que firmó */
+  firmaMeta?: FirmaMetadata;
+}
+
+/** Información del dispositivo desde donde se firmó el vale */
+export interface FirmaMetadata {
+  /** Fecha y hora exacta de la firma en ISO 8601 */
+  fechaHora: string;
+  /** Plataforma del dispositivo (Win32, Android, iPhone, etc.) */
+  plataforma: string;
+  /** User agent completo del navegador */
+  userAgent: string;
+  /** Zona horaria del dispositivo (ej: America/El_Salvador) */
+  zonaHoraria: string;
+  /** Idioma del navegador (ej: es-SV) */
+  idioma: string;
+  /** Tipo de conexión (wifi, 4g, etc.) - solo si está disponible */
+  tipoConexion?: string;
+  /** Indica si es un dispositivo móvil */
+  esMovil: boolean;
 }
 
 // Interfaz para la respuesta unificada (App + API)

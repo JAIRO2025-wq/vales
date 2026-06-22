@@ -61,16 +61,14 @@ storage/
 # ========================
 # src/data/storage/ (vales, imágenes, pdfs generados)
 src/data/storage/
-# src/app/data/ (config runtime)
-src/app/data/
-
-# ========================
-# CONFIG (local, no versionar)
-# ========================
+# Configuración local con datos sensibles (API keys, PINs)
 src/data/config.json
+src/data/config.ts
 
 # ========================
 # MISC
 # ========================
 *.log
+estructura_bonita.txt
+mapa.py
 
