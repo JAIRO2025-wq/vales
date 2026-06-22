@@ -94,35 +94,41 @@ function ValeContent() {
     return () => clearInterval(interval);
   }, [voucherData.id, voucherData.fecha, voucherData.monto, voucherData.concepto]);
 
-        /**
-   * Prepara el valor de imagen para enviar al servidor Python.
-   * 
-   * Ahora las imágenes se almacenan directamente en el servidor Python,
-   * por lo que solo tenemos que pasar la ruta relativa que nos devolvió
-   * el servidor (ej: /storage/imagenes/vale123_firma_123456.png).
-   * 
-   * El servidor Python puede acceder a estas rutas localmente en su disco.
+  /**
+   * Convierte una ruta de imagen a una URL completa que el servidor Python pueda descargar.
+   * Las rutas /storage/... son locales al servidor Next.js, así que las convertimos
+   * a URLs de la API de imágenes para que el servidor Python las descargue por HTTP.
    */
-  const prepareImageValue = (rawPath: string | undefined): string | null => {
+  const prepareImageValue = (rawPath: string | undefined, fecha?: string): string | null => {
     if (!rawPath) return null;
-    // Si ya es una ruta del servidor Python, la enviamos directamente
-    // (el servidor Python puede acceder a /storage/... localmente)
-    if (rawPath.startsWith('/storage/')) {
-      return rawPath;
-    }
-    // Si es una URL absoluta, enviarla tal cual
+    // Si ya es una URL absoluta, enviarla tal cual
     if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) {
       return rawPath;
     }
-    // Si es un base64 (legacy), enviarlo tal cual (el servidor Python lo decodifica)
+    // Si es un base64 (legacy), enviarlo tal cual
     if (rawPath.startsWith('data:')) {
       return rawPath;
+    }
+    // Convertir rutas del storage local a URLs de la API de imágenes
+    // para que el servidor Python pueda descargarlas por HTTP
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const fechaParam = fecha || voucherData.fecha;
+    // Si la ruta empieza con /storage/ o storage/, construir URL de API
+    const cleanPath = rawPath.replace(/^\/?(storage\/)?/, '');
+    if (cleanPath.startsWith('imagenes/') || cleanPath.startsWith('pdfs/')) {
+      return `${origin}/api/imagenes?fecha=${encodeURIComponent(fechaParam)}&file=${encodeURIComponent(cleanPath)}`;
+    }
+    // Si empieza con /api/ ya es una URL relativa a la API
+    if (rawPath.startsWith('/api/')) {
+      return `${origin}${rawPath}`;
     }
     // Fallback: devolver la ruta tal cual
     return rawPath;
   };
 
-  const preparePayload = () => {
+  const preparePayload = () => buildPayload(voucherStatus);
+
+  const buildPayload = (status: VoucherStatusResult | null) => {
     const sheetUpper = (voucherData.sheet || "").toUpperCase();
     const isCajaChica = sheetUpper.includes("CHICA") || sheetUpper === "HOJA 1" || sheetUpper.includes("GENERAL");
     const isClientes = sheetUpper.includes("CLIENTES");
@@ -131,7 +137,7 @@ function ValeContent() {
     const displayMonto = voucherData.monto ? voucherData.monto.replace(/[^\d.]/g, "") : "0.00";
 
     return {
-      id: voucherStatus?.id || voucherData.id,
+      id: status?.id || voucherData.id,
       numero: voucherData.numVale || "---",
       fecha: voucherData.fecha,
       cajaChica: isCajaChica,
@@ -140,17 +146,13 @@ function ValeContent() {
       otrosGastos: isOtros,
       entregadoA: voucherData.entregado,
       laSumaDe: `${displayMonto} Dólares exactos`,
-      concepto: voucherStatus?.concepto || voucherData.concepto || voucherData.rubro,
+      concepto: status?.concepto || voucherData.concepto || voucherData.rubro,
       montoTotal: displayMonto,
       reintegro: "0.00",
       solicitante: voucherData.entregado,
-      autoriza: voucherStatus?.autorizadoPor || voucherData.sucursal,
-                        // Enviamos la ruta del servidor Python directamente.
-            // Como las imágenes están almacenadas en el servidor Python,
-            // usamos firmaUrlRaw (la ruta original guardada en vouchers.json)
-            // que es la ruta que devolvió el servidor Python al subir la imagen.
-            firmaSolicitante: prepareImageValue(voucherStatus?.firmaUrlRaw),
-            comprobante: prepareImageValue(voucherStatus?.comprobanteUrlRaw)
+      autoriza: status?.autorizadoPor || voucherData.sucursal,
+      firmaSolicitante: prepareImageValue(status?.firmaUrlRaw, status?.fecha),
+      comprobante: prepareImageValue(status?.comprobanteUrlRaw, status?.fecha)
     };
   };
 
@@ -182,7 +184,13 @@ function ValeContent() {
     const handleArchiveVoucher = async () => {
       setIsSyncing(true);
       try {
-        const payload = preparePayload();
+        // Forzar refresh del estado antes de archivar para tener datos frescos
+        const freshStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
+        if (freshStatus) setVoucherStatus(freshStatus);
+        
+        // Usar los datos frescos para el payload
+        const currentStatus = freshStatus || voucherStatus;
+        const payload = buildPayload(currentStatus);
         const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
       
         const response = await fetch(`${baseApi}/generate-vale`, {
@@ -195,7 +203,6 @@ function ValeContent() {
         if (!data.pdf_url) throw new Error("URL de PDF no recibida");
 
         // Pasar la URL del PDF al servidor para que lo descargue directamente
-        // (evita enviar el PDF en base64 como parámetro de Server Action)
         const pdfResult = await savePdfAction(voucherData.id, voucherData.fecha, voucherData.numVale, data.pdf_url);
         if (!pdfResult.success) throw new Error(pdfResult.error || "Error al guardar el PDF");
 
@@ -345,29 +352,44 @@ function ValeContent() {
             Imprimir
           </Button>
 
-          {isSigned && !voucherStatus?.hasPdf && (
+          {isSigned && (!voucherStatus?.hasPdf || (voucherStatus?.hasPdf && hasReceipt)) && (
             <Button 
               onClick={handleArchiveVoucher} 
               disabled={isSyncing} 
               className="w-full h-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-sm"
               style={{ fontSize: "9px" }}
+              title={voucherStatus?.hasPdf ? "Regenerar PDF con comprobante" : "Archivar vale"}
             >
               {isSyncing ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <ShieldCheck className="w-3 h-3 mr-1" />}
-              Archivar
+              {voucherStatus?.hasPdf ? "Re-archivar" : "Archivar"}
             </Button>
           )}
 
           {/* Estado */}
-          <div className="mt-auto pt-2 border-t border-zinc-100">
+          <div className="mt-auto pt-2 border-t border-zinc-100 space-y-1.5">
             <div className="flex items-center gap-1.5" style={{ fontSize: "7px" }}>
               <QrCode className="w-2.5 h-2.5 text-muted-foreground" />
               <span className="text-muted-foreground font-bold uppercase">
                 {isSigned ? "Firmado" : "Pendiente"}
               </span>
             </div>
-            <p className="text-[6px] text-muted-foreground mt-0.5">
+            <p className="text-[6px] text-muted-foreground">
               {voucherData.sucursal} · {voucherData.sheet}
             </p>
+            {voucherStatus?.firmaMeta && (
+              <div className="bg-indigo-50/50 rounded p-1.5 border border-indigo-100 space-y-0.5">
+                <p className="text-[6px] font-black text-indigo-600 uppercase tracking-wider">Datos de Firma</p>
+                <p className="text-[7px] text-indigo-900 font-bold">
+                  {voucherStatus.firmaMeta.esMovil ? '📱' : '🖥️'} {new Date(voucherStatus.firmaMeta.fechaHora).toLocaleDateString('es-SV', { day: '2-digit', month: '2-digit', year: '2-digit' })} · {new Date(voucherStatus.firmaMeta.fechaHora).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+                <p className="text-[6px] text-indigo-500 capitalize truncate">
+                  {voucherStatus.firmaMeta.plataforma}{voucherStatus.firmaMeta.tipoConexion ? ` · ${voucherStatus.firmaMeta.tipoConexion.toUpperCase()}` : ''}
+                </p>
+                <p className="text-[6px] text-indigo-400 truncate">
+                  {voucherStatus.firmaMeta.zonaHoraria} · {voucherStatus.firmaMeta.idioma}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

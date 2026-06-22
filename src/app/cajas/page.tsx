@@ -41,16 +41,22 @@ interface SucursalData {
 function CajasContent() {
   const router = useRouter();
   
-  const [cycles] = useState<CycleInfo[]>(getRecentCycles());
-  const [selectedCycle, setSelectedCycle] = useState<string>(cycles[0]?.id || "");
+  const [cycles, setCycles] = useState<CycleInfo[]>([]);
+  const [selectedCycle, setSelectedCycle] = useState<string>("");
   const [sucursalesData, setSucursalesData] = useState<SucursalData[]>([]);
   const [valesDetalle, setValesDetalle] = useState<VoucherRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
   const [sucursalSelected, setSucursalSelected] = useState<string | null>(null);
   const [cajaSelected, setCajaSelected] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 12;
 
   useEffect(() => {
+    // Calcular ciclos SIEMPRE en el cliente para evitar desfases de zona horaria del servidor
+    const recentCycles = getRecentCycles();
+    setCycles(recentCycles);
+    setSelectedCycle(recentCycles[0]?.id || "");
     setMounted(true);
   }, []);
 
@@ -59,6 +65,11 @@ function CajasContent() {
       loadData();
     }
   }, [selectedCycle, mounted]);
+
+  // Resetear página al cambiar de caja/sucursal
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [sucursalSelected, cajaSelected]);
 
   const loadData = async () => {
     setLoading(true);
@@ -156,24 +167,38 @@ function CajasContent() {
     const valesFiltrados = getValesDeCaja(sucursalSelected, cajaSelected);
     const cicloActual = cycles.find(c => c.id === selectedCycle);
 
+    // Ordenar por número de vale
+    const sortedVales = [...valesFiltrados].sort((a, b) => {
+      const numA = parseInt(a.numVale) || 0;
+      const numB = parseInt(b.numVale) || 0;
+      return numA - numB;
+    });
+
+    // Paginación
+    const totalPages = Math.ceil(sortedVales.length / ITEMS_PER_PAGE);
+    const paginatedVales = sortedVales.slice(
+      (currentPage - 1) * ITEMS_PER_PAGE,
+      currentPage * ITEMS_PER_PAGE
+    );
+
     return (
-      <div className="p-4 md:p-8 space-y-6 max-w-7xl mx-auto">
+      <div className="p-2 md:p-4 space-y-3 max-w-7xl mx-auto">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={volverAlResumen}>
-              <ArrowLeft className="w-5 h-5" />
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={volverAlResumen}>
+              <ArrowLeft className="w-4 h-4" />
             </Button>
             <div>
-              <h1 className="text-2xl font-bold font-headline text-primary">
+              <h1 className="text-lg font-bold font-headline text-primary">
                 {sucursalSelected} — {cajaSelected}
               </h1>
-              <p className="text-sm text-muted-foreground">
-                {cicloActual?.label || selectedCycle} · {valesFiltrados.length} vale(s)
+              <p className="text-[10px] text-muted-foreground">
+                {cicloActual?.label || selectedCycle} · {sortedVales.length} vale(s)
               </p>
             </div>
           </div>
-          <Button variant="outline" onClick={() => router.push('/admin')}>
-            Ir al Dashboard
+          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => router.push('/admin')}>
+            Dashboard
           </Button>
         </div>
 
@@ -183,37 +208,37 @@ function CajasContent() {
               <Table>
                 <TableHeader className="bg-muted/30">
                   <TableRow>
-                    <TableHead className="font-bold">N° Vale</TableHead>
-                    <TableHead className="font-bold">Fecha</TableHead>
-                    <TableHead className="font-bold">Entregado a</TableHead>
-                    <TableHead className="font-bold">Rubro</TableHead>
-                    <TableHead className="font-bold text-right">Monto</TableHead>
-                    <TableHead className="font-bold text-center">Estado</TableHead>
+                    <TableHead className="font-bold text-xs">N° Vale</TableHead>
+                    <TableHead className="font-bold text-xs">Fecha</TableHead>
+                    <TableHead className="font-bold text-xs">Entregado a</TableHead>
+                    <TableHead className="font-bold text-xs">Rubro</TableHead>
+                    <TableHead className="font-bold text-xs text-right">Monto</TableHead>
+                    <TableHead className="font-bold text-xs text-center">Estado</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {valesFiltrados.length === 0 ? (
+                  {paginatedVales.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                         No hay vales registrados en esta caja para el ciclo seleccionado.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    valesFiltrados.map(vale => (
+                    paginatedVales.map(vale => (
                       <TableRow key={vale.id} className="hover:bg-muted/10">
-                        <TableCell className="font-black text-primary">{vale.numVale}</TableCell>
-                        <TableCell className="text-xs font-mono">{vale.fecha}</TableCell>
-                        <TableCell className="uppercase text-xs font-medium">
+                        <TableCell className="font-black text-primary text-xs">{vale.numVale}</TableCell>
+                        <TableCell className="text-[10px] font-mono">{vale.fecha}</TableCell>
+                        <TableCell className="uppercase text-[10px] font-medium">
                           {vale.entregado}
-                          <div className="text-[9px] text-muted-foreground font-bold">{vale.rubro}</div>
+                          <div className="text-[8px] text-muted-foreground font-bold">{vale.rubro}</div>
                         </TableCell>
-                        <TableCell className="text-xs">{vale.concepto || vale.rubro}</TableCell>
-                        <TableCell className="font-black text-indigo-700 text-right">$ {vale.monto}</TableCell>
+                        <TableCell className="text-[10px]">{vale.concepto || vale.rubro}</TableCell>
+                        <TableCell className="font-black text-indigo-700 text-right text-xs">$ {vale.monto}</TableCell>
                         <TableCell className="text-center">
                           {vale.firmado ? (
-                            <Badge className="bg-emerald-600 font-bold text-[9px]">FIRMADO</Badge>
+                            <Badge className="bg-emerald-600 font-bold text-[8px]">FIRMADO</Badge>
                           ) : (
-                            <Badge variant="outline" className="text-[9px] text-amber-600 border-amber-300 font-bold">PENDIENTE</Badge>
+                            <Badge variant="outline" className="text-[8px] text-amber-600 border-amber-300 font-bold">PENDIENTE</Badge>
                           )}
                         </TableCell>
                       </TableRow>
@@ -222,6 +247,29 @@ function CajasContent() {
                 </TableBody>
               </Table>
             </div>
+            {/* Paginación */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-3 py-2 border-t bg-muted/10">
+                <span className="text-[9px] text-muted-foreground font-bold">
+                  {sortedVales.length} vales · Página {currentPage} de {totalPages}
+                </span>
+                <div className="flex gap-0.5">
+                  <Button variant="outline" size="sm" className="h-6 w-6 text-[9px] p-0" disabled={currentPage === 1} onClick={() => setCurrentPage(1)}>««</Button>
+                  <Button variant="outline" size="sm" className="h-6 w-6 text-[9px] p-0" disabled={currentPage === 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>«</Button>
+                  {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                    let start = Math.max(1, currentPage - 2);
+                    if (start + 4 > totalPages) start = Math.max(1, totalPages - 4);
+                    const pageNum = start + i;
+                    if (pageNum > totalPages) return null;
+                    return (
+                      <Button key={pageNum} variant={pageNum === currentPage ? "default" : "outline"} size="sm" className="h-6 w-6 text-[9px] p-0 font-bold" onClick={() => setCurrentPage(pageNum)}>{pageNum}</Button>
+                    );
+                  })}
+                  <Button variant="outline" size="sm" className="h-6 w-6 text-[9px] p-0" disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}>»</Button>
+                  <Button variant="outline" size="sm" className="h-6 w-6 text-[9px] p-0" disabled={currentPage === totalPages} onClick={() => setCurrentPage(totalPages)}>»»</Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
