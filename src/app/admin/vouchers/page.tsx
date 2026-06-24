@@ -93,18 +93,58 @@ export default function VouchersAdminPage() {
     }
   };
 
-  const handleDownloadSingle = async (voucher: VoucherEntry) => {
+  /**
+   * Normaliza una URL de voucher para que use el mismo origin que la página actual.
+   * Las URLs guardadas en el índice pueden tener un origin absoluto (ej: https://vale.modulos.uk)
+   * que difiere del origin actual en desarrollo (localhost). Esto causa que el fetch falle por CORS.
+   */
+  const normalizeVoucherUrl = (url: string): string => {
     try {
-      const res = await fetch(voucher.voucherUrl);
+      const parsed = new URL(url);
+      // Si la URL es de otro origen, reemplazar con el origin actual
+      if (parsed.origin !== window.location.origin) {
+        return `/api/imagenes${parsed.search}`;
+      }
+      return url;
+    } catch {
+      // Si no es una URL absoluta, devolver tal cual
+      return url;
+    }
+  };
+
+  const handleDownloadSingle = async (voucher: VoucherEntry) => {
+    const downloadUrl = normalizeVoucherUrl(voucher.voucherUrl);
+    try {
+      const res = await fetch(downloadUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
+      // Deducir extensión del Content-Type real
+      const contentType = res.headers.get("Content-Type") || blob.type || "";
+      const ext = contentType.includes("png") ? "png"
+        : contentType.includes("webp") ? "webp"
+        : contentType.includes("gif") ? "gif"
+        : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg"
+        : "jpg";
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${voucher.id}_voucher.jpg`;
+      a.download = `${voucher.id}_voucher.${ext}`;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      window.open(voucher.voucherUrl, "_blank");
+      document.body.removeChild(a);
+      // Revocar después de un pequeño delay para asegurar que el navegador inició la descarga
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error("Error descargando voucher:", err);
+      // Fallback: intentar con link directo (solo funciona en same-origin)
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = `${voucher.id}_voucher.jpg`;
+      a.target = "_blank";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
   };
 
@@ -115,18 +155,36 @@ export default function VouchersAdminPage() {
     try {
       for (let i = 0; i < sucVouchers.length; i++) {
         const v = sucVouchers[i];
+        const downloadUrl = normalizeVoucherUrl(v.voucherUrl);
         try {
-          const res = await fetch(v.voucherUrl);
+          const res = await fetch(downloadUrl);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const blob = await res.blob();
+          const contentType = res.headers.get("Content-Type") || blob.type || "";
+          const ext = contentType.includes("png") ? "png"
+            : contentType.includes("webp") ? "webp"
+            : contentType.includes("gif") ? "gif"
+            : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg"
+            : "jpg";
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `${v.id}_voucher.jpg`;
+          a.download = `${v.id}_voucher.${ext}`;
+          document.body.appendChild(a);
           a.click();
-          URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
           if (i < sucVouchers.length - 1) await new Promise((r) => setTimeout(r, 300));
         } catch {
-          window.open(v.voucherUrl, "_blank");
+          // Fallback: link directo
+          const a = document.createElement("a");
+          a.href = downloadUrl;
+          a.download = `${v.id}_voucher.jpg`;
+          a.target = "_blank";
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
         }
       }
       toast({ title: "Descarga completada", description: `${sucVouchers.length} vouchers descargados.` });

@@ -85,11 +85,12 @@ function ValeContent() {
     initVoucher();
     
         // Polling para actualizaciones en tiempo real (por si firman desde celular)
+    // Reducido de 4s a 10s para no saturar el servidor con resolveImageUrl
     const interval = setInterval(async () => {
       if (!voucherData.id) return;
       const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
       if (status) setVoucherStatus(status);
-    }, 4000); 
+    }, 10000); 
     
     return () => clearInterval(interval);
   }, [voucherData.id, voucherData.fecha, voucherData.monto, voucherData.concepto]);

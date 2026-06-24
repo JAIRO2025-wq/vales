@@ -81,33 +81,105 @@ export async function normalizeId(id: string): Promise<string> {
   return id.trim().toUpperCase().replace(/[\s_]/g, '-');
 }
 
+// ============================================================
+// CACHÉ DE IMÁGENES EN MEMORIA (TTL: 5 minutos)
+// Evita leer el disco repetidamente para la misma imagen.
+// ============================================================
+const imageCache = new Map<string, { data: string; expiry: number }>();
+const IMAGE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+
+function getCached(key: string): string | undefined {
+  const entry = imageCache.get(key);
+  if (entry && entry.expiry > Date.now()) return entry.data;
+  if (entry) imageCache.delete(key); // expiró
+  return undefined;
+}
+
+function setCache(key: string, data: string): void {
+  // Limpiar entradas expiradas periódicamente (cada ~50 inserciones)
+  if (imageCache.size > 50) {
+    const now = Date.now();
+    for (const [k, v] of imageCache) {
+      if (v.expiry <= now) imageCache.delete(k);
+    }
+  }
+  imageCache.set(key, { data, expiry: Date.now() + IMAGE_CACHE_TTL_MS });
+}
+
 /**
- * Lee un archivo de imagen del filesystem y lo convierte a base64 data URI.
- * Si la ruta ya es un data URI o URL absoluta, la devuelve tal cual.
+ * Resuelve una ruta de imagen a una URL servible (HTTP).
+ * 
+ * ESTRATEGIA (en orden de preferencia):
+ * 1. Si ya es URL absoluta (http/https) → se devuelve tal cual
+ * 2. Si es ruta del servidor Python (/storage/...) → URL completa al servidor Python
+ * 3. Si es ruta local legacy (imagenes/ o pdfs/) → URL a /api/imagenes (el endpoint ya tiene Cache-Control immutable)
+ * 4. Si es data URI → se devuelve tal cual (compatibilidad legacy)
+ * 5. Fallback → se devuelve la ruta tal cual
+ * 
+ * IMPORTANTE: Ya NO convertimos archivos a base64. Usamos URLs directas.
+ * Esto reduce drásticamente el tiempo de carga y el tamaño de la respuesta.
  */
-async function resolveImageBase64(relativePath: string | undefined, fecha: string): Promise<string | undefined> {
+async function resolveImageUrl(relativePath: string | undefined, fecha: string): Promise<string | undefined> {
   if (!relativePath) return undefined;
-  
-  // Si ya es un data URI, devolverlo tal cual
-  if (relativePath.startsWith('data:')) return relativePath;
-  
-  // Si ya es una URL absoluta, devolverla tal cual (para VoucherCard)
+
+  // 1. Ya es URL absoluta → devolver tal cual
   if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) return relativePath;
-  
-  // Si es una ruta del servidor Python (/storage/...), construir URL completa
+
+  // 2. Ya es data URI (legacy) → devolver tal cual
+  if (relativePath.startsWith('data:')) return relativePath;
+
+  // 3. Ruta del servidor Python (/storage/...) → construir URL completa
   if (relativePath.startsWith(PYTHON_STORAGE_PREFIX)) {
+    const cacheKey = `py:${relativePath}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
     try {
       const config = getServerConfig();
       const baseUrl = config.PDF_API_URL.endsWith('/') ? config.PDF_API_URL.slice(0, -1) : config.PDF_API_URL;
-      return `${baseUrl}${relativePath}`;
+      const url = `${baseUrl}${relativePath}`;
+      setCache(cacheKey, url);
+      return url;
     } catch (e) {
-      // Fallback: si no se puede leer config, devolver la ruta tal cual
       return relativePath;
     }
   }
-  
-  // Si es una ruta relativa del storage local (legacy), leer el archivo y convertirlo a base64
+
+  // 4. Ruta relativa local legacy (imagenes/ o pdfs/) → URL a /api/imagenes
+  //    El endpoint /api/imagenes ya tiene Cache-Control: public, max-age=31536000, immutable
   if (relativePath.startsWith('imagenes/') || relativePath.startsWith('pdfs/')) {
+    const cacheKey = `local:${fecha}:${relativePath}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
+    const url = `/api/imagenes?fecha=${encodeURIComponent(fecha)}&file=${encodeURIComponent(relativePath)}`;
+    setCache(cacheKey, url);
+    return url;
+  }
+
+  // 5. Fallback: devolver tal cual
+  return relativePath;
+}
+
+/**
+ * @deprecated Usar resolveImageUrl() en su lugar.
+ * Mantenida para compatibilidad con código legacy que aún dependa de data URIs.
+ * Redirige a resolveImageUrl() para no romper nada.
+ */
+async function resolveImageBase64(relativePath: string | undefined, fecha: string): Promise<string | undefined> {
+  // Si el caller explícitamente necesita base64 (data:), se lo damos.
+  // Pero solo para rutas locales legacy — para todo lo demás usamos URL.
+  if (!relativePath) return undefined;
+  if (relativePath.startsWith('data:')) return relativePath;
+  if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) return relativePath;
+
+  // Para rutas locales legacy que NO están en servidor Python,
+  // convertir a base64 como último recurso (compatibilidad)
+  if (relativePath.startsWith('imagenes/') || relativePath.startsWith('pdfs/')) {
+    const cacheKey = `b64:${fecha}:${relativePath}`;
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+
     const cycle = getCycleFromDate(fecha);
     const fullPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, relativePath);
     try {
@@ -122,15 +194,17 @@ async function resolveImageBase64(relativePath: string | undefined, fecha: strin
       };
       const mime = mimeTypes[ext] || 'application/octet-stream';
       const base64 = fileBuffer.toString('base64');
-      return `data:${mime};base64,${base64}`;
-        } catch (e) {
+      const dataUri = `data:${mime};base64,${base64}`;
+      setCache(cacheKey, dataUri);
+      return dataUri;
+    } catch (e) {
       console.warn('No se pudo leer archivo de imagen:', fullPath);
       return undefined;
     }
   }
-  
-  // Si no coincide con ningún formato conocido, devolver tal cual
-  return relativePath;
+
+  // Para rutas del servidor Python, devolver URL (no base64)
+  return resolveImageUrl(relativePath, fecha);
 }
 
 /**
@@ -151,9 +225,9 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
   
   const auditUrl = `${origin}/vale?${params.toString()}`;
 
-    // Resolver imágenes: convertir rutas relativas a base64
-    const firmaUrlResuelta = await resolveImageBase64(voucher.firmaUrl, voucher.fecha);
-    const comprobanteUrlResuelto = await resolveImageBase64(voucher.comprobanteUrl, voucher.fecha);
+    // Resolver imágenes a URLs (YA NO usamos base64 para no saturar)
+    const firmaUrlResuelta = await resolveImageUrl(voucher.firmaUrl, voucher.fecha);
+    const comprobanteUrlResuelto = await resolveImageUrl(voucher.comprobanteUrl, voucher.fecha);
 
     // Resolver URL del voucher si existe
     let voucherUrl: string | null = null;
@@ -344,15 +418,15 @@ export async function checkVoucherStatusAction(id: string, fecha: string): Promi
     if (!voucher) return null;
     
     // Preservamos las rutas originales (sin resolver) para poder construir URLs
-    // al enviar al servidor PDF, y devolvemos las versiones resueltas (base64) 
-    // para mostrar en el VoucherCard
+    // al enviar al servidor PDF, y devolvemos las versiones resueltas como URLs
+    // (YA NO como base64) para mostrar en el VoucherCard
     const firmaUrlRaw = voucher.firmaUrl;
     const comprobanteUrlRaw = voucher.comprobanteUrl;
     
     return {
       ...voucher,
-      firmaUrl: await resolveImageBase64(voucher.firmaUrl, voucher.fecha),
-      comprobanteUrl: await resolveImageBase64(voucher.comprobanteUrl, voucher.fecha),
+      firmaUrl: await resolveImageUrl(voucher.firmaUrl, voucher.fecha),
+      comprobanteUrl: await resolveImageUrl(voucher.comprobanteUrl, voucher.fecha),
       // Guardamos las rutas originales para que el frontend pueda construir URLs
       // hacia /api/imagenes y enviarlas al servidor PDF
       firmaUrlRaw,

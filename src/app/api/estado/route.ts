@@ -43,8 +43,24 @@ export async function GET(request: NextRequest) {
       try {
         const content = await fs.readFile(filePath, 'utf-8');
         const vouchers: VoucherRecord[] = JSON.parse(content);
-        // Usar Promise.all para esperar a formatVoucherForApi que ahora es async
-        const formatted = await Promise.all(vouchers.map(v => formatVoucherForApi(v, origin)));
+        // Para consultas masivas, NO resolvemos imágenes (solo datos crudos).
+        // El que necesite imágenes que llame al endpoint individual con ?id=.
+        // Esto evita saturar el servidor leyendo cientos de imágenes del disco.
+        const formatted = vouchers.map(v => ({
+          id: v.id,
+          firmado: !!(v.firmado || (v.motivoOmitido && v.motivoOmitido.trim().length > 2)),
+          comprobante: !!v.comprobanteUrl,
+          pdfUrl: `${origin}/vale?fila=${encodeURIComponent(v.fila || '')}&sheet=${encodeURIComponent(v.sheet || '')}&id=${encodeURIComponent(v.id)}&numVale=${encodeURIComponent(v.numVale || '')}&entregado=${encodeURIComponent(v.entregado || '')}&monto=${encodeURIComponent(v.monto || '')}&sucursal=${encodeURIComponent(v.sucursal || '')}&fecha=${encodeURIComponent(v.fecha || '')}&rubro=${encodeURIComponent(v.rubro || '')}${v.concepto ? `&concepto=${encodeURIComponent(v.concepto)}` : ''}`,
+          fechaFirma: v.timestamp || null,
+          firmante: v.entregado || null,
+          autorizadoPor: v.autorizadoPor || null,
+          motivoOmitido: v.motivoOmitido || null,
+          concepto: v.concepto || null,
+          archivado: !!v.hasPdf,
+          voucherUrl: v.voucherUrl || null,
+          voucherSubido: !!(v.voucherUrl || (v as any).voucherSubido),
+          raw: v,
+        }));
         return NextResponse.json(formatted);
       } catch (e) {
         return NextResponse.json([]);
