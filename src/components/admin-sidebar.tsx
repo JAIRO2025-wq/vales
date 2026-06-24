@@ -7,7 +7,8 @@ import {
   Wallet, 
   ChevronRight,
   Settings,
-  LogOut
+  LogOut,
+  Receipt
 } from "lucide-react";
 import { 
   Sidebar, 
@@ -81,6 +82,14 @@ export function AdminSidebar({ config }: AdminSidebarProps) {
                 <Link href="/cajas">
                   <Wallet />
                   <span>Resumen de Cajas</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname.startsWith("/admin/vouchers")} tooltip="Vouchers">
+                <Link href="/admin/vouchers">
+                  <Receipt />
+                  <span>Vouchers Bancarios</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

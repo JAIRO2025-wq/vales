@@ -23,12 +23,18 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Calcular el ciclo contable desde la fecha
-    const cycle = getCycleFromDate(fecha);
-    const fullPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, filePath);
+    // Si la ruta ya incluye la carpeta base (ej: vouchers/2026/SAN-MIGUEL/01/...)
+    // construir la ruta directamente desde STORAGE_PATH sin usar getCycleFromDate
+    let resolvedPath: string;
+    if (filePath.startsWith('vouchers/')) {
+      resolvedPath = path.resolve(path.join(STORAGE_PATH, filePath));
+    } else {
+      // Compatibilidad hacia atrás: rutas relativas dentro del ciclo Flynet
+      const cycle = getCycleFromDate(fecha);
+      resolvedPath = path.resolve(path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, filePath));
+    }
 
     // Security: evitar directory traversal
-    const resolvedPath = path.resolve(fullPath);
     const storageDir = path.resolve(STORAGE_PATH);
     if (!resolvedPath.startsWith(storageDir)) {
       return NextResponse.json({ error: 'Acceso denegado' }, { status: 403 });

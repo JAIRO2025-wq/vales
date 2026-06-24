@@ -28,6 +28,10 @@ export interface VoucherRecord {
   hasPdf?: boolean;
   /** Metadatos del dispositivo que firmó */
   firmaMeta?: FirmaMetadata;
+  /** URL del voucher/comprobante bancario subido */
+  voucherUrl?: string;
+  /** Indica si el voucher ya fue subido */
+  voucherSubido?: boolean;
 }
 
 /** Información del dispositivo desde donde se firmó el vale */
@@ -60,6 +64,10 @@ export interface FormattedVoucher {
   motivoOmitido: string | null;
   concepto: string | null;
   archivado: boolean;
+  /** URL del voucher/comprobante bancario subido */
+  voucherUrl: string | null;
+  /** Indica si el voucher ya fue subido */
+  voucherSubido: boolean;
   raw: VoucherRecord;
 }
 
@@ -147,6 +155,19 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
     const firmaUrlResuelta = await resolveImageBase64(voucher.firmaUrl, voucher.fecha);
     const comprobanteUrlResuelto = await resolveImageBase64(voucher.comprobanteUrl, voucher.fecha);
 
+    // Resolver URL del voucher si existe
+    let voucherUrl: string | null = null;
+    if (voucher.voucherUrl) {
+      if (voucher.voucherUrl.startsWith('http://') || voucher.voucherUrl.startsWith('https://')) {
+        voucherUrl = voucher.voucherUrl;
+      } else if (voucher.voucherUrl.startsWith('/api/')) {
+        voucherUrl = `${origin}${voucher.voucherUrl}`;
+      } else {
+        // Ruta relativa, construir URL completa
+        voucherUrl = `${origin}/api/imagenes?fecha=${encodeURIComponent(voucher.fecha)}&file=${encodeURIComponent(voucher.voucherUrl)}`;
+      }
+    }
+
     return {
       id: voucher.id,
       firmado: !!(voucher.firmado || (voucher.motivoOmitido && voucher.motivoOmitido.trim().length > 2)),
@@ -164,6 +185,8 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
       motivoOmitido: voucher.motivoOmitido || null,
       concepto: voucher.concepto || null,
       archivado: !!voucher.hasPdf,
+      voucherUrl,
+      voucherSubido: !!(voucher.voucherUrl || voucher.voucherSubido),
       raw: {
         ...voucher,
         firmaUrl: firmaUrlResuelta,
