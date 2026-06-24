@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     // Formato: SUCURSAL-YYYY-MM-WX-SHEET-FXX
     // La sucursal puede contener guiones (ej: SAN-MIGUEL)
     // Buscamos el patrón YYYY-MM para ubicar año y mes
-    const normalized = rawId.trim().toUpperCase().replace(/[\s_]/g, '-');
+    const normalized = rawId.trim().toUpperCase().replace(/[\s_]/g, '-').replace(/[^a-zA-Z0-9\-]/g, '');
     const dateMatch = normalized.match(/^(.+)-(\d{4})-(\d{2})-/);
     
     if (!dateMatch) {

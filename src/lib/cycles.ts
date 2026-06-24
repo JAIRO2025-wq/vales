@@ -18,24 +18,70 @@ export interface CycleInfo {
  * - 15 de junio → ciclo May 20 - Jun 19 (id: 2026-05)
  * - 20 de junio → ciclo Jun 20 - Jul 19 (id: 2026-06)
  */
-export function getCurrentCycle(): CycleInfo {
+/**
+ * Obtiene la fecha actual en la zona horaria de El Salvador (UTC-6).
+ * Esto evita discrepancias cuando el servidor (Vercel) está en UTC y el cliente en UTC-6.
+ * 
+ * Usamos un cálculo manual con offset UTC-6 porque Intl.DateTimeFormat con
+ * timeZone puede fallar en algunos navegadores si el timezone no está disponible.
+ */
+function getLocalDate(): { year: number; month: number; day: number } {
   const now = new Date();
-  let year = now.getFullYear();
-  let month = now.getMonth(); // 0-11
-  const day = now.getDate();
+  
+  // Si la app corre en El Salvador (UTC-6), usamos la fecha local directamente.
+  // getTimezoneOffset() en UTC-6 devuelve 360 (positivo), lo que confirma la zona.
+  // Para Vercel (UTC+0), getTimezoneOffset() devuelve 0, y ahí sí ajustamos.
+  const offsetMinutes = now.getTimezoneOffset();
+  
+  let svDate: Date;
+  
+  if (offsetMinutes === 360) {
+    // Ya estamos en UTC-6 (El Salvador), usar fecha local tal cual
+    svDate = now;
+  } else {
+    // Estamos en otra zona (ej: Vercel UTC+0), ajustar a UTC-6
+    // offsetMinutes: 0 en UTC → necesitamos restar 6h
+    // offsetMinutes: -60 en UTC+1 → necesitamos restar 7h
+    const targetOffsetMs = -6 * 60 * 60 * 1000; // UTC-6
+    const currentOffsetMs = -offsetMinutes * 60 * 1000; // invertir signo
+    const diffMs = targetOffsetMs - currentOffsetMs;
+    svDate = new Date(now.getTime() + diffMs);
+  }
+  
+  const year = svDate.getFullYear();
+  const month = svDate.getMonth(); // 0-11
+  const day = svDate.getDate();
+  
+  console.log('[DEBUG cycles] getLocalDate():', {
+    nowISO: now.toISOString(),
+    nowLocal: now.toString(),
+    offsetMinutes,
+    isSV: offsetMinutes === 360,
+    result: `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
+    resultMonth: month,
+    resultDay: day,
+  });
+  
+  return { year, month, day };
+}
+
+export function getCurrentCycle(): CycleInfo {
+  const { year, month, day } = getLocalDate();
+  let cycleYear = year;
+  let cycleMonth = month; // 0-11
 
   // Si hoy es antes del 20, el ciclo empezó el 20 del mes anterior
   if (day < 20) {
-    if (month === 0) {
-      month = 11;
-      year--;
+    if (cycleMonth === 0) {
+      cycleMonth = 11;
+      cycleYear--;
     } else {
-      month--;
+      cycleMonth--;
     }
   }
-  // Si es día 20 o más, el ciclo empieza en ESTE mes (ya estamos en el nuevo ciclo)
+  // Si es día 20 o más, el ciclo empieza en ESTE mes
 
-  return formatCycle(year, month);
+  return formatCycle(cycleYear, cycleMonth);
 }
 
 /**
@@ -43,15 +89,19 @@ export function getCurrentCycle(): CycleInfo {
  */
 export function getRecentCycles(): CycleInfo[] {
   const cycles: CycleInfo[] = [];
-  let { year, month } = getCurrentCycle();
+  const current = getCurrentCycle();
+  // ⚠️ CycleInfo.month es 1-indexado (formatCycle suma 1)
+  // Pero formatCycle espera 0-indexado. Convertimos a 0-indexado aquí.
+  let cycleMonth = current.month - 1;
+  let cycleYear = current.year;
 
   for (let i = 0; i < 6; i++) {
-    cycles.push(formatCycle(year, month));
-    if (month === 0) {
-      month = 11;
-      year--;
+    cycles.push(formatCycle(cycleYear, cycleMonth));
+    if (cycleMonth === 0) {
+      cycleMonth = 11;
+      cycleYear--;
     } else {
-      month--;
+      cycleMonth--;
     }
   }
 

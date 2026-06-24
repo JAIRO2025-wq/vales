@@ -22,8 +22,9 @@ interface VoucherListResponse {
  * 
  * Lista todos los vouchers subidos.
  * Parámetros opcionales:
+ *   ?ciclo=2026-06        → filtra por ciclo (YYYY-MM)
  *   ?sucursal=SAN-MIGUEL  → filtra por sucursal
- *   ?year=2026&month=06   → filtra por año/mes
+ *   ?year=2026&month=06   → filtra por año/mes específico
  * 
  * Sin parámetros, devuelve todos los vouchers de todas las sucursales.
  */
@@ -31,8 +32,18 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const filterSucursal = searchParams.get('sucursal')?.toUpperCase() || null;
+    const filterCiclo = searchParams.get('ciclo') || null; // YYYY-MM
     const filterYear = searchParams.get('year') || null;
     const filterMonth = searchParams.get('month') || null;
+
+    // Si se pasa ?ciclo=, extraer año y mes
+    const effectiveYear = filterYear || (filterCiclo ? filterCiclo.split('-')[0] : null);
+    const effectiveMonth = filterMonth || (filterCiclo ? filterCiclo.split('-')[1] : null);
+
+    console.log('[DEBUG /api/vouchers] Parámetros:', {
+      filterSucursal, filterCiclo, filterYear, filterMonth,
+      effectiveYear, effectiveMonth
+    });
 
     const vouchersDir = path.join(STORAGE_PATH, 'vouchers');
     const results: VoucherListResponse[] = [];
@@ -41,32 +52,47 @@ export async function GET(request: NextRequest) {
     try {
       await fs.access(vouchersDir);
     } catch {
+      console.log('[DEBUG /api/vouchers] Carpeta vouchers no existe');
       return NextResponse.json([]);
     }
 
     // Recorrer años
-    const years = filterYear ? [filterYear] : await fs.readdir(vouchersDir);
+    const years = effectiveYear ? [effectiveYear] : await fs.readdir(vouchersDir);
+    console.log('[DEBUG /api/vouchers] Años a recorrer:', years);
     
     for (const year of years) {
       const yearPath = path.join(vouchersDir, year);
       const yearStat = await fs.stat(yearPath).catch(() => null);
-      if (!yearStat?.isDirectory()) continue;
+      if (!yearStat?.isDirectory()) {
+        console.log(`[DEBUG /api/vouchers] ${yearPath} no es directorio, saltando`);
+        continue;
+      }
 
       // Recorrer sucursales
-      const sucursales = filterSucursal ? [filterSucursal] : await fs.readdir(yearPath);
+      const sucursalesRaw = await fs.readdir(yearPath).catch(() => []);
+      console.log(`[DEBUG /api/vouchers] Sucursales en ${year}:`, sucursalesRaw);
+      const sucursales = filterSucursal ? [filterSucursal] : sucursalesRaw;
       
       for (const sucursal of sucursales) {
         const sucursalPath = path.join(yearPath, sucursal);
         const sucStat = await fs.stat(sucursalPath).catch(() => null);
-        if (!sucStat?.isDirectory()) continue;
+        if (!sucStat?.isDirectory()) {
+          console.log(`[DEBUG /api/vouchers] ${sucursalPath} no es directorio, saltando`);
+          continue;
+        }
 
         // Recorrer meses
-        const months = filterMonth ? [filterMonth] : await fs.readdir(sucursalPath);
+        const monthsRaw = await fs.readdir(sucursalPath).catch(() => []);
+        console.log(`[DEBUG /api/vouchers] Meses en ${year}/${sucursal}:`, monthsRaw);
+        const months = effectiveMonth ? [effectiveMonth] : monthsRaw;
         
         for (const month of months) {
           const monthPath = path.join(sucursalPath, month);
           const monthStat = await fs.stat(monthPath).catch(() => null);
-          if (!monthStat?.isDirectory()) continue;
+          if (!monthStat?.isDirectory()) {
+            console.log(`[DEBUG /api/vouchers] ${monthPath} no es directorio, saltando`);
+            continue;
+          }
 
           // Leer voucher-index.json
           const indexPath = path.join(monthPath, 'voucher-index.json');
@@ -79,6 +105,8 @@ export async function GET(request: NextRequest) {
               subidoEl: data.subidoEl,
             }));
 
+            console.log(`[DEBUG /api/vouchers] ${year}/${sucursal}/${month}: ${entries.length} vouchers`);
+
             if (entries.length > 0) {
               results.push({
                 sucursal,
@@ -87,13 +115,14 @@ export async function GET(request: NextRequest) {
                 vouchers: entries,
               });
             }
-          } catch {
-            // No hay índice en este mes
+          } catch (e) {
+            console.log(`[DEBUG /api/vouchers] No se pudo leer índice en ${year}/${sucursal}/${month}:`, (e as Error).message);
           }
         }
       }
     }
 
+    console.log(`[DEBUG /api/vouchers] Total resultados: ${results.length} grupos`);
     return NextResponse.json(results);
   } catch (error) {
     console.error('Error en GET /api/vouchers:', error);

@@ -152,6 +152,11 @@ export async function POST(request: NextRequest) {
 /**
  * Sincroniza el voucher subido con el vouchers.json del ciclo Flynet
  * para que la API de estado (/api/estado) también lo vea.
+ * 
+ * IMPORTANTE: Usamos el día 25 del mes para calcular el ciclo Flynet.
+ * El ciclo va del 20 de un mes al 19 del siguiente. El día 25 siempre
+ * cae DENTRO del ciclo que corresponde al mes (ej: 2026-06-25 → ciclo 2026-06).
+ * Con día 15, un voucher de junio caía en ciclo 2026-05 (erróneo).
  */
 async function syncToCycleVouchers(
   targetId: string,
@@ -163,7 +168,9 @@ async function syncToCycleVouchers(
 ) {
   try {
     const { getCycleFromDate } = await import('@/lib/cycles');
-    const fecha = `${year}-${month}-15`;
+    // Usar día 25 para asegurar que cae dentro del ciclo del mes correcto
+    // (el ciclo va del 20 al 19 del siguiente mes)
+    const fecha = `${year}-${month}-25`;
     const cycle = getCycleFromDate(fecha);
     const cycleDir = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id);
     const jsonPath = path.join(cycleDir, 'vouchers.json');

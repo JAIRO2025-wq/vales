@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
 import {
   Receipt,
   Building2,
@@ -49,7 +51,24 @@ export default function VouchersAdminPage() {
   const [voucherPage, setVoucherPage] = useState(1);
   const VOUCHERS_PER_PAGE = 10;
 
-  useEffect(() => { setMounted(true); }, []);
+  // Selector de periodo (igual que en /admin)
+  const [cycles, setCycles] = useState<CycleInfo[]>([]);
+  const [selectedCycle, setSelectedCycle] = useState<string>("");
+
+  useEffect(() => {
+    setMounted(true);
+    const recentCycles = getRecentCycles();
+    setCycles(recentCycles);
+    setSelectedCycle(recentCycles[0]?.id || "");
+    // DEBUG: mostrar fecha del sistema y ciclo por defecto
+    const now = new Date();
+    console.log('[DEBUG vouchers] Fecha del sistema:', now.toString());
+    console.log('[DEBUG vouchers] Fecha ISO:', now.toISOString());
+    console.log('[DEBUG vouchers] getMonth():', now.getMonth(), '(0=Ene, 5=Jun, 6=Jul)');
+    console.log('[DEBUG vouchers] getDate():', now.getDate());
+    console.log('[DEBUG vouchers] Ciclos disponibles:', recentCycles.map(c => c.label));
+    console.log('[DEBUG vouchers] Ciclo por defecto:', recentCycles[0]?.id, recentCycles[0]?.label);
+  }, []);
 
   // Resetear página al cambiar datos
   useEffect(() => { setVoucherPage(1); }, [groups]);
@@ -57,9 +76,16 @@ export default function VouchersAdminPage() {
   const loadVouchers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/vouchers");
+      // Pasar el ciclo seleccionado para que la API filtre directamente
+      const params = new URLSearchParams();
+      if (selectedCycle) params.set('ciclo', selectedCycle);
+      const queryString = params.toString();
+      const url = `/api/vouchers${queryString ? `?${queryString}` : ''}`;
+      console.log('[DEBUG vouchers] Llamando API:', url);
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Error al cargar");
       const data: VoucherGroup[] = await res.json();
+      console.log('[DEBUG vouchers] Datos recibidos:', JSON.stringify(data).slice(0, 500));
       setGroups(data);
       const sucursales = new Set(data.map((g) => g.sucursal));
       setExpandedSucursales(sucursales);
@@ -68,9 +94,9 @@ export default function VouchersAdminPage() {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, selectedCycle]);
 
-  useEffect(() => { if (mounted) loadVouchers(); }, [mounted, loadVouchers]);
+  useEffect(() => { if (mounted && selectedCycle) loadVouchers(); }, [mounted, selectedCycle, loadVouchers]);
 
   const handleDelete = async (voucherId: string) => {
     if (!confirm("¿Eliminar el voucher?\n\nEsta acción no se puede deshacer.")) return;
@@ -149,7 +175,7 @@ export default function VouchersAdminPage() {
   };
 
   const handleDownloadSucursal = async (sucursal: string) => {
-    const sucVouchers = allVouchers.filter((v) => v.sucursal === sucursal);
+    const sucVouchers = filteredVouchers.filter((v) => v.sucursal === sucursal);
     if (sucVouchers.length === 0) return;
     toast({ title: "Preparando descarga", description: `Descargando ${sucVouchers.length} vouchers de ${sucursal}...` });
     try {
@@ -209,9 +235,16 @@ export default function VouchersAdminPage() {
     g.vouchers.map((v) => ({ ...v, sucursal: g.sucursal, year: g.year, month: g.month }))
   );
 
+  // Filtrar vouchers por el ciclo seleccionado (mismo formato YYYY-MM que en /admin)
+  const filteredVouchers = useMemo(() => {
+    if (!selectedCycle) return allVouchers;
+    const [cycleYear, cycleMonth] = selectedCycle.split('-');
+    return allVouchers.filter((v) => v.year === cycleYear && v.month === cycleMonth);
+  }, [allVouchers, selectedCycle]);
+
   const sucursalGroups: SucursalGroup[] = (() => {
     const map = new Map<string, (VoucherEntry & { year: string; month: string })[]>();
-    allVouchers.forEach((v) => {
+    filteredVouchers.forEach((v) => {
       const arr = map.get(v.sucursal) || [];
       arr.push(v);
       map.set(v.sucursal, arr);
@@ -221,7 +254,7 @@ export default function VouchersAdminPage() {
       .map(([sucursal, vouchers]) => ({ sucursal, vouchers }));
   })();
 
-  const totalVouchers = allVouchers.length;
+  const totalVouchers = filteredVouchers.length;
 
   const toggleSucursal = (s: string) => {
     setExpandedSucursales((prev) => {
@@ -249,6 +282,16 @@ export default function VouchersAdminPage() {
               </Button>
             </div>
           </div>
+          {/* Selector de periodo (mismo que en /admin) */}
+          <Select value={selectedCycle} onValueChange={(v) => { setSelectedCycle(v); setVoucherPage(1); }}>
+            <SelectTrigger className="w-full h-7 text-[10px]">
+              <Calendar className="w-3 h-3 mr-1 text-primary" />
+              <SelectValue placeholder="Periodo" />
+            </SelectTrigger>
+            <SelectContent>
+              {cycles.map(c => <SelectItem key={c.id} value={c.id} className="text-xs">{c.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
 
         <ScrollArea className="flex-1">
@@ -409,10 +452,10 @@ export default function VouchersAdminPage() {
               </div>
               <div>
                 <p className="font-headline text-lg text-muted-foreground">
-                  {allVouchers.length === 0 ? "No hay vouchers subidos" : "Selecciona un voucher"}
+                  {filteredVouchers.length === 0 ? "No hay vouchers subidos" : "Selecciona un voucher"}
                 </p>
                 <p className="text-xs text-muted-foreground/60">
-                  {allVouchers.length === 0
+                  {filteredVouchers.length === 0
                     ? "Aún no se ha subido ningún comprobante bancario."
                     : "Haz clic en un voucher de la lista para verlo aquí."}
                 </p>
