@@ -176,7 +176,7 @@ function AdminContent() {
 
   const exportBatch = async (type: string) => {
     const targets = vales.filter(v => {
-      const sheet = v.raw.sheet.toUpperCase();
+      const sheet = (v.raw.sheet || '').toUpperCase();
       if (type === "CHICA") return sheet.includes("CHICA") || sheet === "HOJA 1" || sheet.includes("GENERAL");
       if (type === "CLIENTES") return sheet.includes("CLIENTES");
       if (type === "INSTALACIONES") return sheet.includes("INSTALACIONES");
@@ -219,20 +219,24 @@ function AdminContent() {
 
   if (!mounted) return null;
 
+  const getMontoNum = (monto: string | undefined): number => {
+    return parseFloat((monto || '0').replace(/[^\d.]/g, '')) || 0;
+  };
+
   const stats = {
     total: vales.length,
     firmados: vales.filter(v => v.firmado).length,
     conTicket: vales.filter(v => v.comprobante).length,
     montoTotal: vales.reduce((acc, curr) => {
-      const cleanMonto = parseFloat(curr.raw.monto.replace(/[^\d.]/g, '')) || 0;
-      return acc + cleanMonto;
+      return acc + getMontoNum(curr.raw.monto);
     }, 0)
   };
 
   const filteredVales = vales.filter(v => {
-    const matchesSucursal = filterSucursal === "TODAS" || v.raw.sucursal.toUpperCase() === filterSucursal;
+    const sucursalRaw = (v.raw.sucursal || '').toUpperCase();
+    const matchesSucursal = filterSucursal === "TODAS" || sucursalRaw === filterSucursal;
     
-    const sheet = v.raw.sheet.toUpperCase();
+    const sheet = (v.raw.sheet || '').toUpperCase();
     let matchesCaja = filterCaja === "TODAS";
     if (filterCaja === "CAJA CHICA") matchesCaja = sheet.includes("CHICA") || sheet === "HOJA 1" || sheet.includes("GENERAL");
     if (filterCaja === "CLIENTES") matchesCaja = sheet.includes("CLIENTES");
@@ -241,24 +245,24 @@ function AdminContent() {
 
     const searchTerm = filterSearch.toLowerCase().trim();
     const matchesSearch = !searchTerm || (
-      v.raw.entregado.toLowerCase().includes(searchTerm) ||
-      v.raw.rubro.toLowerCase().includes(searchTerm) ||
-      (v.raw.concepto && v.raw.concepto.toLowerCase().includes(searchTerm)) ||
-      v.raw.numVale.includes(searchTerm) ||
-      v.raw.fecha.includes(searchTerm) ||
-      v.raw.monto.includes(searchTerm) ||
-      v.raw.sucursal.toLowerCase().includes(searchTerm) ||
-      v.raw.sheet.toLowerCase().includes(searchTerm) ||
+      (v.raw.entregado || '').toLowerCase().includes(searchTerm) ||
+      (v.raw.rubro || '').toLowerCase().includes(searchTerm) ||
+      (v.raw.concepto || '').toLowerCase().includes(searchTerm) ||
+      (v.raw.numVale || '').includes(searchTerm) ||
+      (v.raw.fecha || '').includes(searchTerm) ||
+      (v.raw.monto || '').includes(searchTerm) ||
+      sucursalRaw.includes(searchTerm) ||
+      sheet.includes(searchTerm) ||
       v.id.toLowerCase().includes(searchTerm) ||
-      (v.raw.autorizadoPor && v.raw.autorizadoPor.toLowerCase().includes(searchTerm)) ||
-      (v.raw.motivoOmitido && v.raw.motivoOmitido.toLowerCase().includes(searchTerm)) ||
+      (v.raw.autorizadoPor || '').toLowerCase().includes(searchTerm) ||
+      (v.raw.motivoOmitido || '').toLowerCase().includes(searchTerm) ||
       // Buscar por metadata de firma
       (v.raw.firmaMeta && (
-        v.raw.firmaMeta.plataforma.toLowerCase().includes(searchTerm) ||
-        v.raw.firmaMeta.zonaHoraria.toLowerCase().includes(searchTerm) ||
-        v.raw.firmaMeta.idioma.toLowerCase().includes(searchTerm) ||
-        (v.raw.firmaMeta.tipoConexion && v.raw.firmaMeta.tipoConexion.toLowerCase().includes(searchTerm)) ||
-        v.raw.firmaMeta.fechaHora.includes(searchTerm)
+        (v.raw.firmaMeta.plataforma || '').toLowerCase().includes(searchTerm) ||
+        (v.raw.firmaMeta.zonaHoraria || '').toLowerCase().includes(searchTerm) ||
+        (v.raw.firmaMeta.idioma || '').toLowerCase().includes(searchTerm) ||
+        (v.raw.firmaMeta.tipoConexion || '').toLowerCase().includes(searchTerm) ||
+        (v.raw.firmaMeta.fechaHora || '').includes(searchTerm)
       ))
     );
     return matchesSucursal && matchesCaja && matchesSearch;

@@ -78,12 +78,12 @@ function CajasContent() {
       setValesDetalle(vales);
 
       const data: SucursalData[] = CONFIG.SUCURSALES.map(suc => {
-        const valesSucursal = vales.filter(v => v.sucursal === suc);
+        const valesSucursal = vales.filter(v => (v.sucursal || '').toUpperCase() === suc);
 
         const cajas: CajaResumen[] = CONFIG.TIPOS_CAJA.map(tipo => {
           const sheetUpper = tipo.toUpperCase();
           const valesCaja = valesSucursal.filter(v => {
-            const vSheet = v.sheet.toUpperCase();
+            const vSheet = (v.sheet || '').toUpperCase();
             if (sheetUpper === "CAJA CHICA") return vSheet.includes("CHICA") || vSheet === "HOJA 1" || vSheet.includes("GENERAL");
             if (sheetUpper === "CLIENTES") return vSheet.includes("CLIENTES");
             if (sheetUpper === "INSTALACIONES") return vSheet.includes("INSTALACIONES");
@@ -91,11 +91,12 @@ function CajasContent() {
             return false;
           });
 
-          const total = valesCaja.reduce((acc, v) => acc + (parseFloat(v.monto.replace(/[^\d.]/g, '')) || 0), 0);
+          const getMonto = (v: VoucherRecord) => parseFloat((v.monto || '0').replace(/[^\d.]/g, '')) || 0;
+          const total = valesCaja.reduce((acc, v) => acc + getMonto(v), 0);
           const pendientes = valesCaja.filter(v => !v.firmado);
           const firmados = valesCaja.filter(v => v.firmado);
-          const montoPendiente = pendientes.reduce((acc, v) => acc + (parseFloat(v.monto.replace(/[^\d.]/g, '')) || 0), 0);
-          const montoFirmado = firmados.reduce((acc, v) => acc + (parseFloat(v.monto.replace(/[^\d.]/g, '')) || 0), 0);
+          const montoPendiente = pendientes.reduce((acc, v) => acc + getMonto(v), 0);
+          const montoFirmado = firmados.reduce((acc, v) => acc + getMonto(v), 0);
 
           return {
             tipo,
@@ -137,8 +138,8 @@ function CajasContent() {
 
   const getValesDeCaja = (sucursal: string, tipo: string) => {
     return valesDetalle.filter(v => {
-      if (v.sucursal !== sucursal) return false;
-      const vSheet = v.sheet.toUpperCase();
+      if ((v.sucursal || '').toUpperCase() !== sucursal) return false;
+      const vSheet = (v.sheet || '').toUpperCase();
       const sheetUpper = tipo.toUpperCase();
       if (sheetUpper === "CAJA CHICA") return vSheet.includes("CHICA") || vSheet === "HOJA 1" || vSheet.includes("GENERAL");
       if (sheetUpper === "CLIENTES") return vSheet.includes("CLIENTES");
@@ -226,14 +227,14 @@ function CajasContent() {
                   ) : (
                     paginatedVales.map(vale => (
                       <TableRow key={vale.id} className="hover:bg-muted/10">
-                        <TableCell className="font-black text-primary text-xs">{vale.numVale}</TableCell>
-                        <TableCell className="text-[10px] font-mono">{vale.fecha}</TableCell>
+                        <TableCell className="font-black text-primary text-xs">{vale.numVale || '—'}</TableCell>
+                        <TableCell className="text-[10px] font-mono">{vale.fecha || '—'}</TableCell>
                         <TableCell className="uppercase text-[10px] font-medium">
-                          {vale.entregado}
-                          <div className="text-[8px] text-muted-foreground font-bold">{vale.rubro}</div>
+                          {vale.entregado || '—'}
+                          <div className="text-[8px] text-muted-foreground font-bold">{vale.rubro || '—'}</div>
                         </TableCell>
-                        <TableCell className="text-[10px]">{vale.concepto || vale.rubro}</TableCell>
-                        <TableCell className="font-black text-indigo-700 text-right text-xs">$ {vale.monto}</TableCell>
+                        <TableCell className="text-[10px]">{vale.concepto || vale.rubro || '—'}</TableCell>
+                        <TableCell className="font-black text-indigo-700 text-right text-xs">$ {(vale.monto || '0').replace(/[^\d.]/g, '') || '0.00'}</TableCell>
                         <TableCell className="text-center">
                           {vale.firmado ? (
                             <Badge className="bg-emerald-600 font-bold text-[8px]">FIRMADO</Badge>
