@@ -65,7 +65,15 @@ def payload_hash(payload: dict) -> str:
     normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
 
-def get_output_pdf_filename(params: dict, index: Optional[int] = None) -> str:
+def get_output_pdf_path(params: dict, index: Optional[int] = None) -> str:
+    """
+    Genera la ruta relativa del PDF con estructura de subcarpetas:
+    generated/{sucursal}/{año-mes}/{tipo_gasto}/{filename}.pdf
+
+    Extrae los componentes del ID (ej. SAN-MIGUEL-2026-06-W2-OTROSGASTOS-F6)
+    o de los campos fecha y booleanos del payload.
+    """
+    # ── Base filename ──
     if params.get('id'):
         file_base = safe_filename(params['id'])
     else:
@@ -74,7 +82,41 @@ def get_output_pdf_filename(params: dict, index: Optional[int] = None) -> str:
             file_base = f"{file_base}-{int(time.time())}"
         else:
             file_base = f"{file_base}-{index}"
-    return f"{file_base}.pdf"
+    filename = f"{file_base}.pdf"
+
+    # ── Componentes de carpeta (valores por defecto) ──
+    sucursal = "DESCONOCIDO"
+    año_mes = "SIN_FECHA"
+    tipo_gasto = "GENERAL"
+
+    id_value = params.get('id', '')
+
+    # 1. Extraer del ID: SUCURSAL-YYYY-MM-W#-TIPO-F#
+    if id_value:
+        m = re.match(r'^(.+)-(\d{4})-(\d{2})-W\d-(.+)-F\d+$', id_value)
+        if m:
+            sucursal = safe_filename(m.group(1))
+            año_mes = f"{m.group(2)}-{m.group(3)}"
+            tipo_gasto = safe_filename(m.group(4))
+
+    # 2. Sobrescribir año-mes desde el campo fecha si está disponible
+    if params.get('fecha'):
+        fm = re.match(r'(\d{4}-\d{2})', params['fecha'])
+        if fm:
+            año_mes = fm.group(1)
+
+    # 3. Determinar tipo de gasto desde los booleanos (más fiable)
+    if params.get('cajaChica'):
+        tipo_gasto = "CAJACHICA"
+    elif params.get('clientes'):
+        tipo_gasto = "CLIENTES"
+    elif params.get('instalaciones'):
+        tipo_gasto = "INSTALACIONES"
+    elif params.get('otrosGastos'):
+        tipo_gasto = "OTROSGASTOS"
+
+    return os.path.join(sucursal, año_mes, tipo_gasto, filename)
+
 
 def get_hash_path(output_path: str) -> str:
     return f"{output_path}.hash"
@@ -235,8 +277,9 @@ async def generate_vale(request: Request, payload: ValeRequest):
     print(f'[APP]   Firma:   orig="{firma_original}" -> resuelto="{params["firmaSolicitante"]}"')
     print(f'[APP]   Comprobante: orig="{comprobante_original}" -> resuelto="{params["comprobante"]}"')
 
-    file_name = get_output_pdf_filename(params)
-    output_path = os.path.join(OUTPUT_DIR, file_name)
+    relative_path = get_output_pdf_path(params)
+    output_path = os.path.join(OUTPUT_DIR, relative_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     params_hash = payload_hash(params)
 
     try:
@@ -246,7 +289,9 @@ async def generate_vale(request: Request, payload: ValeRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f'Error generando PDF: {exc}')
 
-    pdf_url = str(request.url_for('get_pdf', pdf_file_name=file_name))
+    # Construir URL manualmente para preservar slashes en la ruta
+    base = str(request.base_url).rstrip('/')
+    pdf_url = f"{base}/pdf/{relative_path.replace(os.sep, '/')}"
     return JSONResponse({'pdf_url': pdf_url})
 
 @app.post('/generate-vale-bulk')
@@ -263,8 +308,9 @@ async def generate_vale_bulk(request: Request, payload: List[ValeRequest]):
         params['firmaSolicitante'] = _resolve_image_path(params.get('firmaSolicitante'))
         params['comprobante'] = _resolve_image_path(params.get('comprobante'))
 
-        file_name = get_output_pdf_filename(params, index)
-        output_path = os.path.join(OUTPUT_DIR, file_name)
+        relative_path = get_output_pdf_path(params, index)
+        output_path = os.path.join(OUTPUT_DIR, relative_path)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         params_hash = payload_hash(params)
 
         try:
@@ -272,7 +318,7 @@ async def generate_vale_bulk(request: Request, payload: List[ValeRequest]):
                 create_voucher_pdf(params, output_path)
                 write_payload_hash(output_path, params_hash)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f'Error generando PDF {file_name}: {exc}')
+            raise HTTPException(status_code=500, detail=f'Error generando PDF {relative_path}: {exc}')
 
         if output_path not in generated_files:
             generated_files.append(output_path)
@@ -290,15 +336,19 @@ async def generate_vale_bulk(request: Request, payload: List[ValeRequest]):
 def create_zip_file(file_paths: List[str], output_path: str) -> str:
     with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
         for file_path in file_paths:
-            zf.write(file_path, arcname=os.path.basename(file_path))
+            # Preservar la estructura relativa dentro del ZIP
+            arcname = os.path.relpath(file_path, OUTPUT_DIR)
+            zf.write(file_path, arcname=arcname)
     return output_path
 
-@app.get('/pdf/{pdf_file_name}')
+@app.get('/pdf/{pdf_file_name:path}')
 async def get_pdf(pdf_file_name: str):
     file_path = os.path.join(OUTPUT_DIR, pdf_file_name)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail='PDF no encontrado')
-    return FileResponse(file_path, media_type='application/pdf', filename=pdf_file_name)
+    # Usar solo el nombre base para el filename de descarga
+    download_name = os.path.basename(pdf_file_name)
+    return FileResponse(file_path, media_type='application/pdf', filename=download_name)
 
 @app.get('/zip/{zip_file_name}')
 async def get_zip(zip_file_name: str):
