@@ -11,6 +11,9 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { CONFIG } from "@/lib/config";
 import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
 import { getVouchersByCycleAction, formatVoucherForApi, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
+import {
+  Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { 
   LayoutDashboard, 
@@ -43,6 +46,9 @@ function AdminContent() {
   const [vales, setVales] = useState<FormattedVoucher[]>([]);
   const [loading, setLoading] = useState(true);
   const [isBatchExporting, setIsBatchExporting] = useState<string | null>(null);
+  const [showSucursalDialog, setShowSucursalDialog] = useState(false);
+  const [pendingBatchType, setPendingBatchType] = useState<string | null>(null);
+  const [selectedBatchSucursal, setSelectedBatchSucursal] = useState<string>("TODAS");
   const [mounted, setMounted] = useState(false);
 
   const [filterSucursal, setFilterSucursal] = useState("TODAS");
@@ -175,22 +181,45 @@ function AdminContent() {
   };
 
   const exportBatch = async (type: string) => {
+    // Primero preguntar de qué sucursal
+    setPendingBatchType(type);
+    setSelectedBatchSucursal("TODAS");
+    setShowSucursalDialog(true);
+  };
+
+  const confirmExportBatch = async () => {
+    if (!pendingBatchType) return;
+    const type = pendingBatchType;
+    setShowSucursalDialog(false);
+    setPendingBatchType(null);
+
     const targets = vales.filter(v => {
       const sheet = (v.raw.sheet || '').toUpperCase();
-      if (type === "CHICA") return sheet.includes("CHICA") || sheet === "HOJA 1" || sheet.includes("GENERAL");
-      if (type === "CLIENTES") return sheet.includes("CLIENTES");
-      if (type === "INSTALACIONES") return sheet.includes("INSTALACIONES");
-      if (type === "OTROS") return sheet.includes("OTROS");
-      return false;
+      let matchTipo = false;
+      if (type === "CHICA") matchTipo = sheet.includes("CHICA") || sheet === "HOJA 1" || sheet.includes("GENERAL");
+      else if (type === "CLIENTES") matchTipo = sheet.includes("CLIENTES");
+      else if (type === "INSTALACIONES") matchTipo = sheet.includes("INSTALACIONES");
+      else if (type === "OTROS") matchTipo = sheet.includes("OTROS");
+
+      if (!matchTipo) return false;
+
+      // Filtrar por sucursal si se seleccionó una específica
+      if (selectedBatchSucursal !== "TODAS") {
+        const sucursalRaw = (v.raw.sucursal || '').toUpperCase();
+        return sucursalRaw === selectedBatchSucursal;
+      }
+      return true;
     });
 
     if (targets.length === 0) {
-      toast({ title: "Sin datos", description: ` No hay vales de ${type} para este ciclo.` });
+      const sufijo = selectedBatchSucursal !== "TODAS" ? ` en ${selectedBatchSucursal}` : '';
+      toast({ title: "Sin datos", description: `No hay vales de ${type}${sufijo} para este ciclo.` });
       return;
     }
 
     setIsBatchExporting(type);
-    toast({ title: "Preparando paquete", description: `Generando ZIP con ${targets.length} vales...` });
+    const sufijo = selectedBatchSucursal !== "TODAS" ? ` de ${selectedBatchSucursal}` : '';
+    toast({ title: "Preparando paquete", description: `Generando ZIP con ${targets.length} vales${sufijo}...` });
 
     try {
       const payloads = targets.map(v => getPayload(v.raw));
@@ -404,6 +433,48 @@ function AdminContent() {
           </Button>
         </CardContent>
       </Card>
+
+      {/* Diálogo para seleccionar sucursal antes del ZIP */}
+      <Dialog open={showSucursalDialog} onOpenChange={setShowSucursalDialog}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-primary" />
+              ¿De qué sucursal?
+            </DialogTitle>
+            <DialogDescription>
+              Seleccioná la sucursal para generar el ZIP de {{
+                CHICA: "Caja Chica",
+                CLIENTES: "Clientes",
+                INSTALACIONES: "Instalaciones",
+                OTROS: "Otros Gastos",
+              }[pendingBatchType || ''] || pendingBatchType}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Select value={selectedBatchSucursal} onValueChange={setSelectedBatchSucursal}>
+              <SelectTrigger className="w-full h-12 text-base border-2">
+                <SelectValue placeholder="Seleccionar sucursal" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="TODAS">🌎 Todas las sucursales</SelectItem>
+                {CONFIG.SUCURSALES.map(s => (
+                  <SelectItem key={s} value={s}>{s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowSucursalDialog(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={confirmExportBatch}>
+              <Archive className="w-4 h-4 mr-1.5" />
+              Generar ZIP
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card className="shadow-xl">
         <CardHeader className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-2 border-b py-2 px-3">
