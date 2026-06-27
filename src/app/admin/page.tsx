@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
 import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
-import { getVouchersByCycleAction, formatVoucherForApi, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
+import { getVouchersByCycleAction, formatVoucherForApi, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -33,6 +33,8 @@ import {
   Trash2,
   Eraser,
   ImageOff,
+  Signature,
+  Upload,
   AlertTriangle
 } from "lucide-react";
 
@@ -49,6 +51,10 @@ function AdminContent() {
   const [showSucursalDialog, setShowSucursalDialog] = useState(false);
   const [pendingBatchType, setPendingBatchType] = useState<string | null>(null);
   const [selectedBatchSucursal, setSelectedBatchSucursal] = useState<string>("TODAS");
+  const [showSignatureDialog, setShowSignatureDialog] = useState(false);
+  const [signingVoucher, setSigningVoucher] = useState<FormattedVoucher | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploadingSignature, setIsUploadingSignature] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   const [filterSucursal, setFilterSucursal] = useState("TODAS");
@@ -246,6 +252,64 @@ function AdminContent() {
     }
   };
 
+  const handleAttachSignature = (vale: FormattedVoucher) => {
+    setSigningVoucher(vale);
+    setSelectedFile(null);
+    setShowSignatureDialog(true);
+  };
+
+  const handleUploadSignature = async () => {
+    if (!selectedFile || !signingVoucher) return;
+    setIsUploadingSignature(true);
+    try {
+      // 1. Subir la imagen directamente al servidor Python
+      const pythonBaseUrl = CONFIG.PDF_API_URL.replace(/\/$/, "");
+      const formData = new FormData();
+      const fileName = `admin_${signingVoucher.id}_firma_${Date.now()}.png`;
+      formData.append('file', selectedFile, fileName);
+
+      const uploadRes = await fetch(
+        `${pythonBaseUrl}/upload-firma/${encodeURIComponent(signingVoucher.id)}`,
+        { method: 'POST', body: formData }
+      );
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text().catch(() => 'Sin detalle');
+        throw new Error(`Error al subir firma (${uploadRes.status}): ${errText}`);
+      }
+      const uploadData = await uploadRes.json();
+      const firmaPath = uploadData.image_url;
+
+      // 3. Guardar la ruta en el registro del vale
+      const result = await saveVoucherAction({
+        id: signingVoucher.raw.id,
+        fila: signingVoucher.raw.fila,
+        sheet: signingVoucher.raw.sheet,
+        fecha: signingVoucher.raw.fecha,
+        entregado: signingVoucher.raw.entregado,
+        rubro: signingVoucher.raw.rubro,
+        concepto: signingVoucher.raw.concepto,
+        numVale: signingVoucher.raw.numVale,
+        monto: signingVoucher.raw.monto,
+        sucursal: signingVoucher.raw.sucursal,
+        firmado: true,
+        firmaUrl: firmaPath,
+        timestamp: new Date().toISOString(),
+        autorizadoPor: "ADMIN",
+      });
+
+      if (!result.success) throw new Error(result.error || "Error al guardar");
+      
+      setShowSignatureDialog(false);
+      toast({ title: "Firma adjuntada", description: "La imagen de firma se agregó correctamente." });
+      loadData();
+    } catch (err) {
+      console.error(err);
+      toast({ variant: "destructive", title: "Error", description: "No se pudo adjuntar la firma." });
+    } finally {
+      setIsUploadingSignature(false);
+    }
+  };
+
   if (!mounted) return null;
 
   const getMontoNum = (monto: string | undefined): number => {
@@ -434,6 +498,69 @@ function AdminContent() {
         </CardContent>
       </Card>
 
+      {/* Diálogo para adjuntar firma como admin */}
+      <Dialog open={showSignatureDialog} onOpenChange={setShowSignatureDialog}>
+        <DialogContent className="sm:max-w-[450px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Signature className="w-5 h-5 text-green-600" />
+              Adjuntar firma
+            </DialogTitle>
+            <DialogDescription>
+              {signingVoucher && (
+                <>Seleccioná una imagen de firma para <strong>{signingVoucher.raw.entregado}</strong> · Vale #{signingVoucher.raw.numVale}</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            <div className="border-2 border-dashed border-muted-foreground/30 rounded-lg p-6 text-center hover:border-primary/50 transition-colors cursor-pointer"
+              onClick={() => document.getElementById('signature-file-input')?.click()}
+            >
+              {selectedFile ? (
+                <div className="space-y-2">
+                  <div className="w-32 h-16 mx-auto bg-muted rounded flex items-center justify-center overflow-hidden">
+                    <img 
+                      src={URL.createObjectURL(selectedFile)} 
+                      alt="Vista previa"
+                      className="max-w-full max-h-full object-contain"
+                    />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">{selectedFile.name}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {(selectedFile.size / 1024).toFixed(1)} KB
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Upload className="w-8 h-8 mx-auto text-muted-foreground" />
+                  <p className="text-sm font-medium">Hacé clic para seleccionar una imagen</p>
+                  <p className="text-[10px] text-muted-foreground">PNG, JPG o WEBP · Firma del responsable</p>
+                </div>
+              )}
+              <input
+                id="signature-file-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowSignatureDialog(false)} disabled={isUploadingSignature}>
+              Cancelar
+            </Button>
+            <Button onClick={handleUploadSignature} disabled={!selectedFile || isUploadingSignature}>
+              {isUploadingSignature ? (
+                <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Subiendo...</>
+              ) : (
+                <><Upload className="w-4 h-4 mr-1.5" /> Adjuntar firma</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Diálogo para seleccionar sucursal antes del ZIP */}
       <Dialog open={showSucursalDialog} onOpenChange={setShowSucursalDialog}>
         <DialogContent className="sm:max-w-[400px]">
@@ -611,6 +738,20 @@ function AdminContent() {
                           >
                             <Download className="w-4 h-4" />
                           </Button>
+                          {!vale.firmado && (
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              className="h-8 w-8 text-green-600 hover:text-green-800 hover:bg-green-50"
+                              title="Adjuntar firma (admin)"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleAttachSignature(vale);
+                              }}
+                            >
+                              <Signature className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                           {vale.firmado && (
                             <Button 
                               variant="ghost" 
