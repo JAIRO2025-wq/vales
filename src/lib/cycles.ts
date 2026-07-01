@@ -6,7 +6,7 @@
  * - mensual: del día 1 al último día del mes (para CARA SUCIA)
  */
 
-import { CONFIG, type CicloConfig } from './config';
+import { type CicloConfig } from './config';
 
 export interface CycleInfo {
   id: string; // Formato: YYYY-MM
@@ -19,12 +19,16 @@ const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep
 
 /**
  * Obtiene la configuración de ciclo para una sucursal.
- * Si la sucursal no tiene configuración, devuelve el default (flynet, cutoff 20).
+ * 
+ * CARA SUCIA usa ciclo mensual (1ro al último día del mes).
+ * El resto usa ciclo Flynet (del día 20 al 19 del siguiente mes).
+ * 
+ * NOTA: Usamos hardcode en vez de depender del import estático de CONFIG
+ * porque en producción Next.js compila el bundle y congela los valores.
  */
 function getCicloConfig(branch?: string): CicloConfig {
-  const ciclos = CONFIG.CICLOS || {};
-  if (branch && ciclos[branch]) return ciclos[branch];
-  return ciclos['default'] || { tipo: 'flynet', cutoffDay: 20 };
+  if (branch === 'CARA SUCIA') return { tipo: 'mensual' };
+  return { tipo: 'flynet', cutoffDay: 20 };
 }
 
 /**
