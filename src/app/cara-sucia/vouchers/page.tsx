@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
+import { getRecentCyclesMensual, type CycleInfo } from "@/lib/cycles-mensual";
 import {
   Receipt,
   Loader2,
@@ -42,7 +42,7 @@ export default function CaraSuciaVouchersPage() {
 
   useEffect(() => {
     setMounted(true);
-    const recentCycles = getRecentCycles(BRANCH);
+    const recentCycles = getRecentCyclesMensual();
     setCycles(recentCycles);
     setSelectedCycle(recentCycles[0]?.id || "");
   }, []);

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
-import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
+import { getRecentCyclesMensual, type CycleInfo } from "@/lib/cycles-mensual";
 import { getVouchersByCycleAction, formatVoucherForApi, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -63,7 +63,7 @@ export default function CaraSuciaDashboard() {
 
   useEffect(() => {
     // Ciclos MENSUALES para CARA SUCIA
-    const recentCycles = getRecentCycles(BRANCH);
+    const recentCycles = getRecentCyclesMensual();
     setCycles(recentCycles);
     setSelectedCycle(recentCycles[0]?.id || "");
     setMounted(true);

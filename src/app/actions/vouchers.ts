@@ -4,7 +4,18 @@ import fs from 'fs/promises';
 import path from 'path';
 import { revalidatePath } from 'next/cache';
 import { getCurrentCycle, getCycleFromDate } from '@/lib/cycles';
+import { getCycleFromDateMensual } from '@/lib/cycles-mensual';
 import { getServerConfig } from '@/lib/config-server';
+
+/**
+ * Obtiene el ciclo contable correcto según la sucursal.
+ * - CARA SUCIA → ciclo mensual (cycles-mensual.ts)
+ * - Otras → ciclo Flynet (cycles.ts)
+ */
+function getCycleForBranch(fecha: string, branch?: string) {
+  if (branch === 'CARA SUCIA') return getCycleFromDateMensual(fecha);
+  return getCycleFromDate(fecha);
+}
 
 const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
 
@@ -302,7 +313,7 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
  */
 export async function saveVoucherAction(voucher: VoucherRecord) {
   try {
-    const cycle = getCycleFromDate(voucher.fecha, voucher.sucursal);
+    const cycle = getCycleForBranch(voucher.fecha, voucher.sucursal);
     const yearDir = path.join(STORAGE_PATH, cycle.year.toString());
     const cycleDir = path.join(yearDir, cycle.id);
     
@@ -367,7 +378,7 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
 export async function savePdfAction(voucherId: string, fecha: string, numVale: string, pdfUrlOrBase64: string) {
   try {
     const branch = await extractBranchFromId(voucherId);
-    const cycle = getCycleFromDate(fecha, branch);
+    const cycle = getCycleForBranch(fecha, branch);
     const yearDir = path.join(STORAGE_PATH, cycle.year.toString());
     const cycleDir = path.join(yearDir, cycle.id);
     const pdfDir = path.join(cycleDir, 'pdfs');
@@ -435,7 +446,7 @@ export interface VoucherStatusResult extends VoucherRecord {
 export async function checkVoucherStatusAction(id: string, fecha: string): Promise<VoucherStatusResult | null> {
   try {
     const branch = await extractBranchFromId(id);
-    const cycle = getCycleFromDate(fecha, branch);
+    const cycle = getCycleForBranch(fecha, branch);
     const vouchers = await getVouchersByCycleAction(cycle.id);
     const targetId = await normalizeId(id);
     const voucher = vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
@@ -468,7 +479,7 @@ export async function checkVoucherStatusAction(id: string, fecha: string): Promi
 export async function deleteSignatureAction(id: string, fecha: string) {
   try {
     const branch = await extractBranchFromId(id);
-    const cycle = getCycleFromDate(fecha, branch);
+    const cycle = getCycleForBranch(fecha, branch);
     const jsonPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, 'vouchers.json');
     const targetId = await normalizeId(id);
     
@@ -515,7 +526,7 @@ export async function deleteSignatureAction(id: string, fecha: string) {
 export async function deleteComprobanteAction(id: string, fecha: string) {
   try {
     const branch = await extractBranchFromId(id);
-    const cycle = getCycleFromDate(fecha, branch);
+    const cycle = getCycleForBranch(fecha, branch);
     const jsonPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, 'vouchers.json');
     const targetId = await normalizeId(id);
     
@@ -560,7 +571,7 @@ export async function deleteComprobanteAction(id: string, fecha: string) {
 export async function deleteVoucherAction(id: string, fecha: string) {
   try {
     const branch = await extractBranchFromId(id);
-    const cycle = getCycleFromDate(fecha, branch);
+    const cycle = getCycleForBranch(fecha, branch);
     const jsonPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, 'vouchers.json');
     const targetId = await normalizeId(id);
     
