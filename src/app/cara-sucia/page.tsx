@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
@@ -38,7 +38,9 @@ import {
   AlertTriangle
 } from "lucide-react";
 
-function AdminContent() {
+const BRANCH = "CARA SUCIA";
+
+export default function CaraSuciaDashboard() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -48,24 +50,20 @@ function AdminContent() {
   const [vales, setVales] = useState<FormattedVoucher[]>([]);
   const [loading, setLoading] = useState(true);
   const [isBatchExporting, setIsBatchExporting] = useState<string | null>(null);
-  const [showSucursalDialog, setShowSucursalDialog] = useState(false);
-  const [pendingBatchType, setPendingBatchType] = useState<string | null>(null);
-  const [selectedBatchSucursal, setSelectedBatchSucursal] = useState<string>("TODAS");
   const [showSignatureDialog, setShowSignatureDialog] = useState(false);
   const [signingVoucher, setSigningVoucher] = useState<FormattedVoucher | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploadingSignature, setIsUploadingSignature] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  const [filterSucursal, setFilterSucursal] = useState("TODAS");
   const [filterCaja, setFilterCaja] = useState("TODAS");
   const [filterSearch, setFilterSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 15;
 
   useEffect(() => {
-    // Calcular ciclos SIEMPRE en el cliente para evitar desfases de zona horaria del servidor
-    const recentCycles = getRecentCycles();
+    // Ciclos MENSUALES para CARA SUCIA
+    const recentCycles = getRecentCycles(BRANCH);
     setCycles(recentCycles);
     setSelectedCycle(recentCycles[0]?.id || "");
     setMounted(true);
@@ -73,9 +71,7 @@ function AdminContent() {
 
   useEffect(() => {
     if (mounted) {
-      const s = searchParams.get("sucursal");
       const c = searchParams.get("caja");
-      if (s) setFilterSucursal(s);
       if (c) setFilterCaja(c.toUpperCase());
     }
   }, [searchParams, mounted]);
@@ -84,8 +80,10 @@ function AdminContent() {
     setLoading(true);
     try {
       const rawData = await getVouchersByCycleAction(selectedCycle);
+      // Filtrar solo vales de CARA SUCIA
+      const filteredRaw = rawData.filter(v => (v.sucursal || '').toUpperCase() === BRANCH);
       const origin = typeof window !== 'undefined' ? window.location.origin : "";
-      const formatted = await Promise.all(rawData.map(v => formatVoucherForApi(v, origin)));
+      const formatted = await Promise.all(filteredRaw.map(v => formatVoucherForApi(v, origin)));
       setVales(formatted);
     } catch (err) {
       console.error("Error cargando vales:", err);
@@ -96,15 +94,12 @@ function AdminContent() {
   };
 
   useEffect(() => {
-    if (mounted && selectedCycle) {
-      loadData();
-    }
+    if (mounted && selectedCycle) loadData();
   }, [selectedCycle, mounted]);
 
-  // Resetear página al cambiar filtros o ciclo
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterSucursal, filterCaja, filterSearch, selectedCycle]);
+  }, [filterCaja, filterSearch, selectedCycle]);
 
   const handleViewVale = (vale: FormattedVoucher) => {
     const params = new URLSearchParams();
@@ -118,13 +113,9 @@ function AdminContent() {
     params.set("fecha", vale.raw.fecha || "");
     params.set("rubro", vale.raw.rubro || "");
     if (vale.raw.concepto) params.set("concepto", vale.raw.concepto);
-    
     window.open(`/vale?${params.toString()}`, '_blank');
   };
 
-    /**
-   * Construye la URL para que el servidor Python descargue la imagen directamente.
-   */
   const buildImageUrl = (filePath: string | undefined, fecha: string): string | null => {
     if (!filePath) return null;
     if (filePath.startsWith('data:')) return filePath;
@@ -143,7 +134,6 @@ function AdminContent() {
     const isInstalaciones = sheetUpper.includes("INSTALACIONES");
     const isOtros = sheetUpper.includes("OTROS");
     const displayMonto = voucher.monto ? voucher.monto.replace(/[^\d.]/g, "") : "0.00";
-
     return {
       id: voucher.id,
       numero: voucher.numVale || "---",
@@ -159,9 +149,6 @@ function AdminContent() {
       reintegro: "0.00",
       solicitante: voucher.entregado,
       autoriza: voucher.autorizadoPor || voucher.sucursal,
-            // Enviamos URL al servidor Python en vez de base64 enorme
-      // Usamos firmaUrlRaw/comprobanteUrlRaw (rutas originales del storage)
-      // para construir URLs completas que el servidor Python pueda descargar
       firmaSolicitante: buildImageUrl(voucher.firmaUrlRaw ?? voucher.firmaUrl, voucher.fecha),
       comprobante: buildImageUrl(voucher.comprobanteUrlRaw ?? voucher.comprobanteUrl, voucher.fecha),
       fechaImagen: voucher.fecha
@@ -172,7 +159,6 @@ function AdminContent() {
     try {
       const payload = getPayload(voucherRaw);
       const baseApi = CONFIG.PDF_API_URL.replace(/\/$/, "");
-      
       const response = await fetch(`${baseApi}/generate-vale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -187,65 +173,37 @@ function AdminContent() {
   };
 
   const exportBatch = async (type: string) => {
-    // Primero preguntar de qué sucursal
-    setPendingBatchType(type);
-    setSelectedBatchSucursal("TODAS");
-    setShowSucursalDialog(true);
-  };
-
-  const confirmExportBatch = async () => {
-    if (!pendingBatchType) return;
-    const type = pendingBatchType;
-    setShowSucursalDialog(false);
-    setPendingBatchType(null);
-
     const targets = vales.filter(v => {
       const sheet = (v.raw.sheet || '').toUpperCase();
-      let matchTipo = false;
-      if (type === "CHICA") matchTipo = sheet.includes("CHICA") || sheet === "HOJA 1" || sheet.includes("GENERAL");
-      else if (type === "CLIENTES") matchTipo = sheet.includes("CLIENTES");
-      else if (type === "INSTALACIONES") matchTipo = sheet.includes("INSTALACIONES");
-      else if (type === "OTROS") matchTipo = sheet.includes("OTROS");
-
-      if (!matchTipo) return false;
-
-      // Filtrar por sucursal si se seleccionó una específica
-      if (selectedBatchSucursal !== "TODAS") {
-        const sucursalRaw = (v.raw.sucursal || '').toUpperCase();
-        return sucursalRaw === selectedBatchSucursal;
-      }
-      return true;
+      if (type === "CHICA") return sheet.includes("CHICA") || sheet === "HOJA 1" || sheet.includes("GENERAL");
+      if (type === "CLIENTES") return sheet.includes("CLIENTES");
+      if (type === "INSTALACIONES") return sheet.includes("INSTALACIONES");
+      if (type === "OTROS") return sheet.includes("OTROS");
+      return false;
     });
 
     if (targets.length === 0) {
-      const sufijo = selectedBatchSucursal !== "TODAS" ? ` en ${selectedBatchSucursal}` : '';
-      toast({ title: "Sin datos", description: `No hay vales de ${type}${sufijo} para este ciclo.` });
+      toast({ title: "Sin datos", description: `No hay vales de ${type} en CARA SUCIA para este ciclo.` });
       return;
     }
 
     setIsBatchExporting(type);
-    const sufijo = selectedBatchSucursal !== "TODAS" ? ` de ${selectedBatchSucursal}` : '';
-    toast({ title: "Preparando paquete", description: `Generando ZIP con ${targets.length} vales${sufijo}...` });
-
+    toast({ title: "Preparando paquete", description: `Generando ZIP con ${targets.length} vales...` });
     try {
       const payloads = targets.map(v => getPayload(v.raw));
       const baseApi = CONFIG.PDF_API_URL.replace(/\/$/, "");
-      
       const response = await fetch(`${baseApi}/generate-vale-bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payloads)
       });
-
       if (!response.ok) throw new Error("Error en el motor de PDF");
-      
       const data = await response.json();
       if (data.zip_url) {
         window.location.href = data.zip_url;
         toast({ title: "Paquete listo", description: "Iniciando descarga del archivo ZIP." });
       }
     } catch (e) {
-      console.error(e);
       toast({ variant: "destructive", title: "Error", description: "No se pudo generar el paquete ZIP masivo." });
     } finally {
       setIsBatchExporting(null);
@@ -262,12 +220,10 @@ function AdminContent() {
     if (!selectedFile || !signingVoucher) return;
     setIsUploadingSignature(true);
     try {
-      // 1. Subir la imagen directamente al servidor Python
       const pythonBaseUrl = CONFIG.PDF_API_URL.replace(/\/$/, "");
       const formData = new FormData();
       const fileName = `admin_${signingVoucher.id}_firma_${Date.now()}.png`;
       formData.append('file', selectedFile, fileName);
-
       const uploadRes = await fetch(
         `${pythonBaseUrl}/upload-firma/${encodeURIComponent(signingVoucher.id)}`,
         { method: 'POST', body: formData }
@@ -278,8 +234,6 @@ function AdminContent() {
       }
       const uploadData = await uploadRes.json();
       const firmaPath = uploadData.image_url;
-
-      // 3. Guardar la ruta en el registro del vale
       const result = await saveVoucherAction({
         id: signingVoucher.raw.id,
         fila: signingVoucher.raw.fila,
@@ -296,9 +250,7 @@ function AdminContent() {
         timestamp: new Date().toISOString(),
         autorizadoPor: "ADMIN",
       });
-
       if (!result.success) throw new Error(result.error || "Error al guardar");
-      
       setShowSignatureDialog(false);
       toast({ title: "Firma adjuntada", description: "La imagen de firma se agregó correctamente." });
       loadData();
@@ -320,15 +272,10 @@ function AdminContent() {
     total: vales.length,
     firmados: vales.filter(v => v.firmado).length,
     conTicket: vales.filter(v => v.comprobante).length,
-    montoTotal: vales.reduce((acc, curr) => {
-      return acc + getMontoNum(curr.raw.monto);
-    }, 0)
+    montoTotal: vales.reduce((acc, curr) => acc + getMontoNum(curr.raw.monto), 0)
   };
 
   const filteredVales = vales.filter(v => {
-    const sucursalRaw = (v.raw.sucursal || '').toUpperCase();
-    const matchesSucursal = filterSucursal === "TODAS" || sucursalRaw === filterSucursal;
-    
     const sheet = (v.raw.sheet || '').toUpperCase();
     let matchesCaja = filterCaja === "TODAS";
     if (filterCaja === "CAJA CHICA") matchesCaja = sheet.includes("CHICA") || sheet === "HOJA 1" || sheet.includes("GENERAL");
@@ -344,31 +291,18 @@ function AdminContent() {
       (v.raw.numVale || '').includes(searchTerm) ||
       (v.raw.fecha || '').includes(searchTerm) ||
       (v.raw.monto || '').includes(searchTerm) ||
-      sucursalRaw.includes(searchTerm) ||
       sheet.includes(searchTerm) ||
-      v.id.toLowerCase().includes(searchTerm) ||
-      (v.raw.autorizadoPor || '').toLowerCase().includes(searchTerm) ||
-      (v.raw.motivoOmitido || '').toLowerCase().includes(searchTerm) ||
-      // Buscar por metadata de firma
-      (v.raw.firmaMeta && (
-        (v.raw.firmaMeta.plataforma || '').toLowerCase().includes(searchTerm) ||
-        (v.raw.firmaMeta.zonaHoraria || '').toLowerCase().includes(searchTerm) ||
-        (v.raw.firmaMeta.idioma || '').toLowerCase().includes(searchTerm) ||
-        (v.raw.firmaMeta.tipoConexion || '').toLowerCase().includes(searchTerm) ||
-        (v.raw.firmaMeta.fechaHora || '').includes(searchTerm)
-      ))
+      v.id.toLowerCase().includes(searchTerm)
     );
-    return matchesSucursal && matchesCaja && matchesSearch;
+    return matchesCaja && matchesSearch;
   });
 
-  // Ordenar por número de vale (ascendente)
   const sortedVales = [...filteredVales].sort((a, b) => {
     const numA = parseInt(a.raw.numVale) || 0;
     const numB = parseInt(b.raw.numVale) || 0;
     return numA - numB;
   });
 
-  // Paginación
   const totalPages = Math.ceil(sortedVales.length / ITEMS_PER_PAGE);
   const paginatedVales = sortedVales.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -377,22 +311,26 @@ function AdminContent() {
 
   return (
     <div className="p-2 md:p-4 space-y-3 max-w-7xl mx-auto pb-20">
+      {/* HEADER */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
         <div>
-          <h1 className="text-xl font-bold font-headline text-primary flex items-center gap-2">
-            <LayoutDashboard className="w-5 h-5" /> 
-            Panel de Auditoría
+          <h1 className="text-xl font-bold font-headline text-amber-800 flex items-center gap-2">
+            <Building2 className="w-5 h-5" /> 
+            CARA SUCIA — Panel de Auditoría
           </h1>
-          <p className="text-[10px] text-muted-foreground">Ciclo contable y gestión de desembolsos.</p>
+          <p className="text-[10px] text-muted-foreground">
+            Ciclo mensual · Gestión de desembolsos
+            <span className="ml-2 text-amber-600 font-bold">🟡 Sub App</span>
+          </p>
         </div>
         <div className="flex gap-1.5">
           <Button variant="outline" size="icon" className="h-9 w-9" onClick={loadData} disabled={loading}>
             <RefreshCcw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </Button>
           <Select value={selectedCycle} onValueChange={setSelectedCycle}>
-            <SelectTrigger className="w-[220px] h-9 border-2 border-primary/20 text-xs">
-              <Calendar className="w-3.5 h-3.5 mr-1.5 text-primary" />
-              <SelectValue placeholder="Ciclo" />
+            <SelectTrigger className="w-[220px] h-9 border-2 border-amber-300 text-xs">
+              <Calendar className="w-3.5 h-3.5 mr-1.5 text-amber-600" />
+              <SelectValue placeholder="Ciclo Mensual" />
             </SelectTrigger>
             <SelectContent>
               {cycles.map(c => <SelectItem key={c.id} value={c.id}>{c.label}</SelectItem>)}
@@ -401,15 +339,16 @@ function AdminContent() {
         </div>
       </header>
 
+      {/* STATS */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-        <Card className="border-l-4 border-l-primary shadow-sm bg-white">
+        <Card className="border-l-4 border-l-amber-600 shadow-sm bg-white">
           <CardContent className="py-2.5 px-3">
             <div className="flex justify-between items-center">
               <div>
                 <p className="text-[9px] font-black text-muted-foreground uppercase">Total Ciclo</p>
                 <p className="text-xl font-black font-headline">{stats.total}</p>
               </div>
-              <FileText className="w-5 h-5 text-primary/10" />
+              <FileText className="w-5 h-5 text-amber-600/20" />
             </div>
           </CardContent>
         </Card>
@@ -448,57 +387,31 @@ function AdminContent() {
         </Card>
       </div>
 
-      <Card className="bg-muted/30 border-dashed border-2">
+      {/* BATCH EXPORT */}
+      <Card className="bg-amber-50/30 border-dashed border-2 border-amber-200">
         <CardHeader className="py-1.5 px-3">
           <CardTitle className="text-[11px] font-bold flex items-center gap-1.5">
             <Archive className="w-3.5 h-3.5" /> Acciones de Lote (Descarga ZIP)
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-1.5 pb-2 px-3">
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="bg-white h-7 text-[10px]"
-            disabled={!!isBatchExporting}
-            onClick={() => exportBatch("CHICA")}
-          >
-            {isBatchExporting === "CHICA" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
-            ZIP Caja Chica
-          </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="bg-white h-7 text-[10px]"
-            disabled={!!isBatchExporting}
-            onClick={() => exportBatch("CLIENTES")}
-          >
-            {isBatchExporting === "CLIENTES" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
-            ZIP Clientes
-          </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="bg-white h-7 text-[10px]"
-            disabled={!!isBatchExporting}
-            onClick={() => exportBatch("INSTALACIONES")}
-          >
-            {isBatchExporting === "INSTALACIONES" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
-            ZIP Instalaciones
-          </Button>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="bg-white h-7 text-[10px]"
-            disabled={!!isBatchExporting}
-            onClick={() => exportBatch("OTROS")}
-          >
-            {isBatchExporting === "OTROS" ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
-            ZIP Otros Gastos
-          </Button>
+          {["CHICA", "CLIENTES", "INSTALACIONES", "OTROS"].map(type => (
+            <Button 
+              key={type}
+              variant="outline" 
+              size="sm" 
+              className="bg-white h-7 text-[10px]"
+              disabled={!!isBatchExporting}
+              onClick={() => exportBatch(type)}
+            >
+              {isBatchExporting === type ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : <Archive className="w-3 h-3 mr-1.5" />}
+              ZIP {{CHICA:"Caja Chica", CLIENTES:"Clientes", INSTALACIONES:"Instalaciones", OTROS:"Otros Gastos"}[type]}
+            </Button>
+          ))}
         </CardContent>
       </Card>
 
-      {/* Diálogo para adjuntar firma como admin */}
+      {/* SIGNATURE DIALOG */}
       <Dialog open={showSignatureDialog} onOpenChange={setShowSignatureDialog}>
         <DialogContent className="sm:max-w-[450px]">
           <DialogHeader>
@@ -514,21 +427,15 @@ function AdminContent() {
           </DialogHeader>
           <div className="py-4 space-y-4">
             <div className="border-2 border-dashed border-muted-foreground/30 rounded-lg p-6 text-center hover:border-primary/50 transition-colors cursor-pointer"
-              onClick={() => document.getElementById('signature-file-input')?.click()}
+              onClick={() => document.getElementById('cs-signature-file-input')?.click()}
             >
               {selectedFile ? (
                 <div className="space-y-2">
                   <div className="w-32 h-16 mx-auto bg-muted rounded flex items-center justify-center overflow-hidden">
-                    <img 
-                      src={URL.createObjectURL(selectedFile)} 
-                      alt="Vista previa"
-                      className="max-w-full max-h-full object-contain"
-                    />
+                    <img src={URL.createObjectURL(selectedFile)} alt="Vista previa" className="max-w-full max-h-full object-contain" />
                   </div>
                   <p className="text-sm font-medium text-foreground">{selectedFile.name}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {(selectedFile.size / 1024).toFixed(1)} KB
-                  </p>
+                  <p className="text-[10px] text-muted-foreground">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -537,99 +444,31 @@ function AdminContent() {
                   <p className="text-[10px] text-muted-foreground">PNG, JPG o WEBP · Firma del responsable</p>
                 </div>
               )}
-              <input
-                id="signature-file-input"
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="hidden"
-                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-              />
+              <input id="cs-signature-file-input" type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
+                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} />
             </div>
           </div>
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setShowSignatureDialog(false)} disabled={isUploadingSignature}>
-              Cancelar
-            </Button>
+            <Button variant="outline" onClick={() => setShowSignatureDialog(false)} disabled={isUploadingSignature}>Cancelar</Button>
             <Button onClick={handleUploadSignature} disabled={!selectedFile || isUploadingSignature}>
-              {isUploadingSignature ? (
-                <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Subiendo...</>
-              ) : (
-                <><Upload className="w-4 h-4 mr-1.5" /> Adjuntar firma</>
-              )}
+              {isUploadingSignature ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Subiendo...</> : <><Upload className="w-4 h-4 mr-1.5" /> Adjuntar firma</>}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Diálogo para seleccionar sucursal antes del ZIP */}
-      <Dialog open={showSucursalDialog} onOpenChange={setShowSucursalDialog}>
-        <DialogContent className="sm:max-w-[400px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-primary" />
-              ¿De qué sucursal?
-            </DialogTitle>
-            <DialogDescription>
-              Seleccioná la sucursal para generar el ZIP de {{
-                CHICA: "Caja Chica",
-                CLIENTES: "Clientes",
-                INSTALACIONES: "Instalaciones",
-                OTROS: "Otros Gastos",
-              }[pendingBatchType || ''] || pendingBatchType}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <Select value={selectedBatchSucursal} onValueChange={setSelectedBatchSucursal}>
-              <SelectTrigger className="w-full h-12 text-base border-2">
-                <SelectValue placeholder="Seleccionar sucursal" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="TODAS">🌎 Todas las sucursales</SelectItem>
-                {CONFIG.SUCURSALES.map(s => (
-                  <SelectItem key={s} value={s}>{s}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setShowSucursalDialog(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={confirmExportBatch}>
-              <Archive className="w-4 h-4 mr-1.5" />
-              Generar ZIP
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
+      {/* TABLE */}
       <Card className="shadow-xl">
         <CardHeader className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-2 border-b py-2 px-3">
-          <CardTitle className="font-headline text-base text-primary">Registro de Actividad</CardTitle>
+          <CardTitle className="font-headline text-base text-amber-800">Registro de Actividad — CARA SUCIA</CardTitle>
           <div className="flex flex-wrap gap-1.5 w-full xl:w-auto">
             <div className="relative min-w-[160px] flex-1">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <Input 
-                id="search-input-admin"
-                name="search"
-                placeholder="Buscar vale, fecha, monto, persona..." 
-                className="pl-8 h-8 border-2 text-xs"
-                value={filterSearch}
-                onChange={(e) => setFilterSearch(e.target.value)}
-              />
+              <Input placeholder="Buscar vale, fecha, monto, persona..." className="pl-8 h-8 border-2 text-xs"
+                value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} />
             </div>
-            <Select value={filterSucursal} onValueChange={setFilterSucursal}>
-              <SelectTrigger className="h-8 w-[140px] border-2 text-xs">
-                <Building2 className="w-3.5 h-3.5 mr-1.5" />
-                <SelectValue placeholder="Sucursal" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="TODAS">Todas las Sedes</SelectItem>
-                {CONFIG.SUCURSALES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-              </SelectContent>
-            </Select>
             <Select value={filterCaja} onValueChange={setFilterCaja}>
-              <SelectTrigger className="h-8 w-[140px] border-2 text-xs">
+              <SelectTrigger className="h-8 w-[160px] border-2 text-xs">
                 <Receipt className="w-3.5 h-3.5 mr-1.5" />
                 <SelectValue placeholder="Tipo Caja" />
               </SelectTrigger>
@@ -646,32 +485,28 @@ function AdminContent() {
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <Table>
-              <TableHeader className="bg-muted/30">
+              <TableHeader className="bg-amber-50/50">
                 <TableRow>
                   <TableHead className="font-bold">Fecha</TableHead>
                   <TableHead className="font-bold">N° Vale</TableHead>
-                  <TableHead className="font-bold">Personal / Sede</TableHead>
+                  <TableHead className="font-bold">Personal</TableHead>
                   <TableHead className="font-bold">Tipo de Caja</TableHead>
                   <TableHead className="font-bold text-right">Monto</TableHead>
                   <TableHead className="font-bold text-center">Estado</TableHead>
-                  <TableHead className="font-bold">Firma / Dispositivo</TableHead>
+                  <TableHead className="font-bold">Firma</TableHead>
                   <TableHead className="text-right font-bold">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">Sincronizando registros...</TableCell>
+                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">Cargando vales de CARA SUCIA...</TableCell>
                   </TableRow>
                 ) : paginatedVales.length > 0 ? (
                   paginatedVales.map((vale) => (
-                    <TableRow 
-                      key={vale.id} 
-                      className="hover:bg-muted/10 cursor-pointer"
-                      onClick={() => handleViewVale(vale)}
-                    >
+                    <TableRow key={vale.id} className="hover:bg-amber-50/30 cursor-pointer" onClick={() => handleViewVale(vale)}>
                       <TableCell className="text-[10px] font-mono">{vale.raw.fecha}</TableCell>
-                      <TableCell className="font-black text-primary">
+                      <TableCell className="font-black text-amber-800">
                         <div className="flex items-center gap-2">
                           {vale.raw.numVale}
                           {vale.archivado && <FileCheck className="w-3 h-3 text-emerald-600" />}
@@ -679,12 +514,9 @@ function AdminContent() {
                       </TableCell>
                       <TableCell className="uppercase text-xs font-medium">
                         {vale.raw.entregado}
-                        <div className="text-[9px] text-muted-foreground font-bold">{vale.raw.sucursal}</div>
                       </TableCell>
                       <TableCell>
-                         <Badge variant="outline" className="text-[9px] uppercase font-bold">
-                            {vale.raw.sheet}
-                         </Badge>
+                        <Badge variant="outline" className="text-[9px] uppercase font-bold">{vale.raw.sheet}</Badge>
                       </TableCell>
                       <TableCell className="font-black text-indigo-700 text-right">{vale.raw.monto}</TableCell>
                       <TableCell className="text-center">
@@ -710,107 +542,59 @@ function AdminContent() {
                               </span>
                             </div>
                             <div className="text-[8px] capitalize truncate max-w-[120px]">
-                              {vale.raw.firmaMeta.plataforma}
-                              {vale.raw.firmaMeta.tipoConexion && ` · ${vale.raw.firmaMeta.tipoConexion.toUpperCase()}`}
+                              {vale.raw.firmaMeta.plataforma}{vale.raw.firmaMeta.tipoConexion && ` · ${vale.raw.firmaMeta.tipoConexion.toUpperCase()}`}
                             </div>
                           </div>
                         ) : vale.firmado ? (
                           <span className="text-[9px] italic">Sin metadata</span>
-                        ) : (
-                          <span className="text-[9px] text-muted-foreground/50">—</span>
-                        )}
+                        ) : <span className="text-[9px] text-muted-foreground/50">—</span>}
                       </TableCell>
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex justify-end gap-1">
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="h-8 w-8 text-primary"
-                            onClick={() => handleViewVale(vale)}
-                          >
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => handleViewVale(vale)}>
                             <Eye className="w-4 h-4" />
                           </Button>
-                                                    <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="h-8 w-8"
-                            onClick={() => exportSinglePDF(vale.raw)}
-                          >
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => exportSinglePDF(vale.raw)}>
                             <Download className="w-4 h-4" />
                           </Button>
                           {!vale.firmado && (
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="h-8 w-8 text-green-600 hover:text-green-800 hover:bg-green-50"
-                              title="Adjuntar firma (admin)"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleAttachSignature(vale);
-                              }}
-                            >
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-green-600 hover:text-green-800 hover:bg-green-50"
+                              title="Adjuntar firma (admin)" onClick={(e) => { e.stopPropagation(); handleAttachSignature(vale); }}>
                               <Signature className="w-3.5 h-3.5" />
                             </Button>
                           )}
                           {vale.firmado && (
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
-                              title="Eliminar firma"
-                              onClick={async (e) => {
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50"
+                              title="Eliminar firma" onClick={async (e) => {
                                 e.stopPropagation();
                                 if (!confirm('¿Eliminar la firma de este vale?')) return;
                                 const result = await deleteSignatureAction(vale.id, vale.raw.fecha);
-                                if (result.success) {
-                                  toast({ title: 'Firma eliminada' });
-                                  loadData();
-                                } else {
-                                  toast({ variant: 'destructive', title: 'Error', description: result.error });
-                                }
-                              }}
-                            >
+                                if (result.success) { toast({ title: 'Firma eliminada' }); loadData(); }
+                                else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
+                              }}>
                               <Eraser className="w-3.5 h-3.5" />
                             </Button>
                           )}
                           {vale.comprobante && (
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="h-8 w-8 text-amber-600 hover:text-amber-800 hover:bg-amber-50"
-                              title="Eliminar comprobante"
-                              onClick={async (e) => {
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-amber-600 hover:text-amber-800 hover:bg-amber-50"
+                              title="Eliminar comprobante" onClick={async (e) => {
                                 e.stopPropagation();
                                 if (!confirm('¿Eliminar el comprobante/ticket de este vale?')) return;
                                 const result = await deleteComprobanteAction(vale.id, vale.raw.fecha);
-                                if (result.success) {
-                                  toast({ title: 'Comprobante eliminado' });
-                                  loadData();
-                                } else {
-                                  toast({ variant: 'destructive', title: 'Error', description: result.error });
-                                }
-                              }}
-                            >
+                                if (result.success) { toast({ title: 'Comprobante eliminado' }); loadData(); }
+                                else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
+                              }}>
                               <ImageOff className="w-3.5 h-3.5" />
                             </Button>
                           )}
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="h-8 w-8 text-red-600 hover:text-red-800 hover:bg-red-50"
-                            title="Eliminar vale completo"
-                            onClick={async (e) => {
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600 hover:text-red-800 hover:bg-red-50"
+                            title="Eliminar vale" onClick={async (e) => {
                               e.stopPropagation();
-                              if (!confirm('⚠️ ¿ELIMINAR COMPLETAMENTE este vale?\n\nSe borrará el registro y todos sus archivos (firma, comprobante, PDF).\n\nEsta acción no se puede deshacer.')) return;
+                              if (!confirm('¿Eliminar este vale permanentemente?')) return;
                               const result = await deleteVoucherAction(vale.id, vale.raw.fecha);
-                              if (result.success) {
-                                toast({ title: 'Vale eliminado', description: 'Registro y archivos borrados.' });
-                                loadData();
-                              } else {
-                                toast({ variant: 'destructive', title: 'Error', description: result.error });
-                              }
-                            }}
-                          >
+                              if (result.success) { toast({ title: 'Vale eliminado' }); loadData(); }
+                              else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
+                            }}>
                             <Trash2 className="w-3.5 h-3.5" />
                           </Button>
                         </div>
@@ -819,93 +603,31 @@ function AdminContent() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={8} className="h-40 text-center text-muted-foreground">Sin registros que coincidan con los filtros.</TableCell>
+                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                      No hay vales registrados en CARA SUCIA para este ciclo.
+                    </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </div>
-          {/* Paginación */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/10">
-              <span className="text-[10px] text-muted-foreground font-bold">
-                {sortedVales.length} vales · Página {currentPage} de {totalPages}
-              </span>
-              <div className="flex gap-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-[10px]"
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage(1)}
-                >
-                  ««
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-[10px]"
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                >
-                  «
-                </Button>
-                {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-                  // Mostrar ventana de 5 páginas centrada en la actual
-                  let start = Math.max(1, currentPage - 2);
-                  if (start + 4 > totalPages) start = Math.max(1, totalPages - 4);
-                  const pageNum = start + i;
-                  if (pageNum > totalPages) return null;
-                  return (
-                    <Button
-                      key={pageNum}
-                      variant={pageNum === currentPage ? "default" : "outline"}
-                      size="sm"
-                      className="h-7 w-7 text-[10px] font-bold"
-                      onClick={() => setCurrentPage(pageNum)}
-                    >
-                      {pageNum}
-                    </Button>
-                  );
-                })}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-[10px]"
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                >
-                  »
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-[10px]"
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage(totalPages)}
-                >
-                  »»
-                </Button>
-              </div>
-            </div>
-          )}
         </CardContent>
       </Card>
 
-      <footer className="flex justify-between items-center text-[9px] text-muted-foreground font-bold uppercase tracking-widest pt-2 pb-1 border-t">
-        <span>Flynet Digital v4.8</span>
-        <div className="flex gap-3">
-          <span className="flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> Sincronizado</span>
+      {/* PAGINATION */}
+      {totalPages > 1 && (
+        <div className="flex justify-center gap-2 mt-2">
+          <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => p - 1)}>
+            Anterior
+          </Button>
+          <span className="flex items-center text-xs font-bold text-muted-foreground px-3">
+            Pág {currentPage} de {totalPages}
+          </span>
+          <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage(p => p + 1)}>
+            Siguiente
+          </Button>
         </div>
-      </footer>
+      )}
     </div>
-  );
-}
-
-export default function AdminPage() {
-  return (
-    <Suspense fallback={<div className="p-8 text-center">Sincronizando con el servidor...</div>}>
-      <AdminContent />
-    </Suspense>
   );
 }

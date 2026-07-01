@@ -1,155 +1,161 @@
 /**
- * Utilidades para manejar los ciclos de cierre de Flynet (del 20 de un mes al 19 del siguiente)
+ * Utilidades para manejar los ciclos de cierre.
+ *
+ * Tipos de ciclo:
+ * - flynet: del día {cutoffDay} de un mes al {cutoffDay - 1} del siguiente (default: 20→19)
+ * - mensual: del día 1 al último día del mes (para CARA SUCIA)
  */
 
+import { CONFIG, type CicloConfig } from './config';
+
 export interface CycleInfo {
-  id: string; // Formato: YYYY-MM (Mes de inicio)
-  label: string; // Ejemplo: Oct 20 - Nov 19 2026
+  id: string; // Formato: YYYY-MM
+  label: string; // Ejemplo: "Oct 20 - Nov 19 2026" o "Jul 1 - Jul 31 2026"
   year: number;
   month: number;
 }
 
+const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
 /**
- * Calcula el ciclo actual basado en la fecha de hoy.
- * El ciclo de Flynet va del 20 de un mes al 19 del siguiente.
- * 
- * Ejemplos:
- * - 22 de junio → ciclo Jun 20 - Jul 19 (id: 2026-06)
- * - 15 de junio → ciclo May 20 - Jun 19 (id: 2026-05)
- * - 20 de junio → ciclo Jun 20 - Jul 19 (id: 2026-06)
+ * Obtiene la configuración de ciclo para una sucursal.
+ * Si la sucursal no tiene configuración, devuelve el default (flynet, cutoff 20).
  */
+function getCicloConfig(branch?: string): CicloConfig {
+  const ciclos = CONFIG.CICLOS || {};
+  if (branch && ciclos[branch]) return ciclos[branch];
+  return ciclos['default'] || { tipo: 'flynet', cutoffDay: 20 };
+}
+
 /**
  * Obtiene la fecha actual en la zona horaria de El Salvador (UTC-6).
- * Esto evita discrepancias cuando el servidor (Vercel) está en UTC y el cliente en UTC-6.
- * 
- * Usamos un cálculo manual con offset UTC-6 porque Intl.DateTimeFormat con
- * timeZone puede fallar en algunos navegadores si el timezone no está disponible.
  */
 function getLocalDate(): { year: number; month: number; day: number } {
   const now = new Date();
-  
-  // Si la app corre en El Salvador (UTC-6), usamos la fecha local directamente.
-  // getTimezoneOffset() en UTC-6 devuelve 360 (positivo), lo que confirma la zona.
-  // Para Vercel (UTC+0), getTimezoneOffset() devuelve 0, y ahí sí ajustamos.
   const offsetMinutes = now.getTimezoneOffset();
-  
   let svDate: Date;
-  
   if (offsetMinutes === 360) {
-    // Ya estamos en UTC-6 (El Salvador), usar fecha local tal cual
     svDate = now;
   } else {
-    // Estamos en otra zona (ej: Vercel UTC+0), ajustar a UTC-6
-    // offsetMinutes: 0 en UTC → necesitamos restar 6h
-    // offsetMinutes: -60 en UTC+1 → necesitamos restar 7h
-    const targetOffsetMs = -6 * 60 * 60 * 1000; // UTC-6
-    const currentOffsetMs = -offsetMinutes * 60 * 1000; // invertir signo
-    const diffMs = targetOffsetMs - currentOffsetMs;
-    svDate = new Date(now.getTime() + diffMs);
+    const targetOffsetMs = -6 * 60 * 60 * 1000;
+    const currentOffsetMs = -offsetMinutes * 60 * 1000;
+    svDate = new Date(now.getTime() + (targetOffsetMs - currentOffsetMs));
   }
-  
-  const year = svDate.getFullYear();
-  const month = svDate.getMonth(); // 0-11
-  const day = svDate.getDate();
-  
-  console.log('[DEBUG cycles] getLocalDate():', {
-    nowISO: now.toISOString(),
-    nowLocal: now.toString(),
-    offsetMinutes,
-    isSV: offsetMinutes === 360,
-    result: `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
-    resultMonth: month,
-    resultDay: day,
-  });
-  
-  return { year, month, day };
-}
-
-export function getCurrentCycle(): CycleInfo {
-  const { year, month, day } = getLocalDate();
-  let cycleYear = year;
-  let cycleMonth = month; // 0-11
-
-  // Si hoy es antes del 20, el ciclo empezó el 20 del mes anterior
-  if (day < 20) {
-    if (cycleMonth === 0) {
-      cycleMonth = 11;
-      cycleYear--;
-    } else {
-      cycleMonth--;
-    }
-  }
-  // Si es día 20 o más, el ciclo empieza en ESTE mes
-
-  return formatCycle(cycleYear, cycleMonth);
+  return {
+    year: svDate.getFullYear(),
+    month: svDate.getMonth(),
+    day: svDate.getDate(),
+  };
 }
 
 /**
- * Genera una lista de los últimos 6 ciclos para el selector
+ * Calcula el ciclo actual basado en la fecha de hoy.
+ * @param branch Sucursal (opcional) — si es 'CARA SUCIA' usa ciclo mensual
  */
-export function getRecentCycles(): CycleInfo[] {
-  const cycles: CycleInfo[] = [];
-  const current = getCurrentCycle();
-  // ⚠️ CycleInfo.month es 1-indexado (formatCycle suma 1)
-  // Pero formatCycle espera 0-indexado. Convertimos a 0-indexado aquí.
-  let cycleMonth = current.month - 1;
-  let cycleYear = current.year;
+export function getCurrentCycle(branch?: string): CycleInfo {
+  const { year, month, day } = getLocalDate();
+  const config = getCicloConfig(branch);
 
-  for (let i = 0; i < 6; i++) {
-    cycles.push(formatCycle(cycleYear, cycleMonth));
-    if (cycleMonth === 0) {
-      cycleMonth = 11;
-      cycleYear--;
-    } else {
-      cycleMonth--;
-    }
+  if (config.tipo === 'mensual') {
+    // Ciclo mensual: 1ro al último día del mes
+    return formatMensualCycle(year, month);
   }
 
+  // Ciclo Flynet: cutoffDay al cutoffDay-1 del siguiente mes
+  const cutoff = config.cutoffDay ?? 20;
+  let cycleYear = year;
+  let cycleMonth = month;
+
+  if (day < cutoff) {
+    if (cycleMonth === 0) { cycleMonth = 11; cycleYear--; }
+    else { cycleMonth--; }
+  }
+  return formatFlynetCycle(cycleYear, cycleMonth, cutoff);
+}
+
+/**
+ * Genera una lista de los últimos N ciclos para el selector.
+ * @param branch Sucursal (opcional)
+ * @param count Cantidad de ciclos (default 6)
+ */
+export function getRecentCycles(branch?: string, count = 6): CycleInfo[] {
+  const cycles: CycleInfo[] = [];
+  const current = getCurrentCycle(branch);
+  let cm = current.month - 1;
+  let cy = current.year;
+
+  for (let i = 0; i < count; i++) {
+    const config = getCicloConfig(branch);
+    if (config.tipo === 'mensual') {
+      cycles.push(formatMensualCycle(cy, cm));
+    } else {
+      cycles.push(formatFlynetCycle(cy, cm, config.cutoffDay ?? 20));
+    }
+    if (cm === 0) { cm = 11; cy--; }
+    else { cm--; }
+  }
   return cycles;
 }
 
 /**
- * Calcula el ciclo contable de Flynet (20 al 19) a partir de una fecha.
- * Útil para determinar dónde guardar/buscar un voucher según su fecha.
+ * Calcula el ciclo contable a partir de una fecha.
+ * @param dateStr Fecha en formato YYYY-MM-DD
+ * @param branch Sucursal (opcional)
  */
-export function getCycleFromDate(dateStr: string): { year: number; id: string } {
+export function getCycleFromDate(dateStr: string, branch?: string): { year: number; id: string } {
   try {
     const parts = dateStr.split('-');
-    if (parts.length !== 3) throw new Error("Formato de fecha inválido");
-    
-    let year = parseInt(parts[0], 10);
-    let month = parseInt(parts[1], 10) - 1; 
+    if (parts.length !== 3) throw new Error("Formato inválido");
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
     const day = parseInt(parts[2], 10);
+    const config = getCicloConfig(branch);
 
-    if (day < 20) {
-      if (month === 0) {
-        month = 11;
-        year--;
-      } else {
-        month--;
-      }
+    if (config.tipo === 'mensual') {
+      // Ciclo mensual: el ID es el año-mes de la fecha misma
+      return {
+        year,
+        id: `${year}-${(month + 1).toString().padStart(2, '0')}`,
+      };
     }
-    
+
+    // Ciclo Flynet
+    const cutoff = config.cutoffDay ?? 20;
+    let cy = year;
+    let cm = month;
+    if (day < cutoff) {
+      if (cm === 0) { cm = 11; cy--; }
+      else { cm--; }
+    }
     return {
-      year,
-      id: `${year}-${(month + 1).toString().padStart(2, '0')}`
+      year: cy,
+      id: `${cy}-${(cm + 1).toString().padStart(2, '0')}`,
     };
-  } catch (e) {
-    const current = getCurrentCycle();
+  } catch {
+    const current = getCurrentCycle(branch);
     return { year: current.year, id: current.id };
   }
 }
 
-function formatCycle(year: number, month: number): CycleInfo {
-  const startDate = new Date(year, month, 20);
-  const endDate = new Date(year, month + 1, 19);
-  
-  const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-  
+/** Formatea un ciclo Flynet (cutoffDay al cutoffDay-1 del siguiente mes) */
+function formatFlynetCycle(year: number, month: number, cutoff: number): CycleInfo {
+  const startDate = new Date(year, month, cutoff);
+  const endDate = new Date(year, month + 1, cutoff - 1);
   return {
     id: `${year}-${(month + 1).toString().padStart(2, '0')}`,
-    label: `${monthNames[startDate.getMonth()]} 20 - ${monthNames[endDate.getMonth()]} 19 ${endDate.getFullYear()}`,
+    label: `${monthNames[startDate.getMonth()]} ${cutoff} - ${monthNames[endDate.getMonth()]} ${cutoff - 1} ${endDate.getFullYear()}`,
     year,
-    month: month + 1
+    month: month + 1,
+  };
+}
+
+/** Formatea un ciclo mensual (1ro al último día del mes) */
+function formatMensualCycle(year: number, month: number): CycleInfo {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return {
+    id: `${year}-${(month + 1).toString().padStart(2, '0')}`,
+    label: `${monthNames[month]} 1 - ${monthNames[month]} ${lastDay} ${year}`,
+    year,
+    month: month + 1,
   };
 }

@@ -8,6 +8,11 @@ export interface UserPin {
   branch?: string; 
 }
 
+export interface CicloConfig {
+  tipo: 'flynet' | 'mensual';
+  cutoffDay?: number;
+}
+
 export interface AppConfig {
   API_URL: string;
   PDF_API_URL: string;
@@ -16,6 +21,7 @@ export interface AppConfig {
   LOGO_URL: string;
   SUCURSALES: string[];
   TIPOS_CAJA: string[];
+  CICLOS?: Record<string, CicloConfig>;
 }
 
 /**

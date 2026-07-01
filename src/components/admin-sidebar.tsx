@@ -8,7 +8,8 @@ import {
   ChevronRight,
   Settings,
   LogOut,
-  Receipt
+  Receipt,
+  ExternalLink
 } from "lucide-react";
 import { 
   Sidebar, 
@@ -130,6 +131,27 @@ export function AdminSidebar({ config }: AdminSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+
+      <SidebarGroup>
+        <SidebarGroupLabel className="text-amber-700">Módulos Especiales</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton 
+                asChild
+                className="bg-amber-50 border border-amber-200 hover:bg-amber-100 data-[active=true]:bg-amber-100"
+                tooltip="Cara Sucia (Sub App)"
+              >
+                <Link href="/cara-sucia" target="_blank">
+                  <Building2 className="text-amber-700" />
+                  <span className="text-amber-900 font-bold">🏪 Cara Sucia</span>
+                  <ExternalLink className="w-3 h-3 ml-auto text-amber-500" />
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
 
       <SidebarFooter className="border-t p-2">
         <SidebarMenu>
