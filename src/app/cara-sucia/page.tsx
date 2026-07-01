@@ -9,12 +9,59 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
-import { getRecentCyclesMensual, type CycleInfo } from "@/lib/cycles-mensual";
 import { getVouchersByCycleAction, formatVoucherForApi, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+
+// ===== CICLO MENSUAL INLINE (sin imports externos) =====
+interface CycleInfo {
+  id: string;
+  label: string;
+  year: number;
+  month: number;
+}
+
+const MONTHS = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+
+function getLocalDateSV() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset();
+  const sv = offset === 360 ? now : new Date(now.getTime() + (-6*3600000 - -offset*60000));
+  return { year: sv.getFullYear(), month: sv.getMonth(), day: sv.getDate() };
+}
+
+function getCicloMensualActual(): CycleInfo {
+  const { year, month } = getLocalDateSV();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return {
+    id: `${year}-${(month+1).toString().padStart(2,'0')}`,
+    label: `${MONTHS[month]} 1 - ${MONTHS[month]} ${lastDay} ${year}`,
+    year,
+    month: month + 1,
+  };
+}
+
+function getUltimosCiclosMensuales(count = 6): CycleInfo[] {
+  const ciclos: CycleInfo[] = [];
+  const actual = getCicloMensualActual();
+  let m = actual.month - 1;
+  let y = actual.year;
+  for (let i = 0; i < count; i++) {
+    const lastDay = new Date(y, m + 1, 0).getDate();
+    ciclos.push({
+      id: `${y}-${(m+1).toString().padStart(2,'0')}`,
+      label: `${MONTHS[m]} 1 - ${MONTHS[m]} ${lastDay} ${y}`,
+      year: y,
+      month: m + 1,
+    });
+    if (m === 0) { m = 11; y--; } else { m--; }
+  }
+  return ciclos;
+}
+// ===== FIN CICLO MENSUAL =====
+
 import { 
   LayoutDashboard, 
   Search, 
@@ -62,10 +109,9 @@ export default function CaraSuciaDashboard() {
   const ITEMS_PER_PAGE = 15;
 
   useEffect(() => {
-    // Ciclos MENSUALES para CARA SUCIA
-    const recentCycles = getRecentCyclesMensual();
-    setCycles(recentCycles);
-    setSelectedCycle(recentCycles[0]?.id || "");
+    const ciclos = getUltimosCiclosMensuales();
+    setCycles(ciclos);
+    setSelectedCycle(ciclos[0]?.id || "");
     setMounted(true);
   }, []);
 

@@ -8,9 +8,11 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // Server Actions - Ajuste de límite de tamaño (Stable en Next.js 15)
-  serverActions: {
-    bodySizeLimit: '50mb',
+  // Server Actions - Ajuste de límite de tamaño
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '50mb',
+    },
   },
   async rewrites() {
     return [

@@ -5,7 +5,39 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { getRecentCyclesMensual, type CycleInfo } from "@/lib/cycles-mensual";
+
+// ===== CICLO MENSUAL INLINE (sin imports externos) =====
+interface CycleInfo {
+  id: string;
+  label: string;
+  year: number;
+  month: number;
+}
+const MONTHS = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+function getLocalDateSV() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset();
+  const sv = offset === 360 ? now : new Date(now.getTime() + (-6*3600000 - -offset*60000));
+  return { year: sv.getFullYear(), month: sv.getMonth(), day: sv.getDate() };
+}
+function getUltimosCiclosMensuales(count = 6): CycleInfo[] {
+  const { year, month } = getLocalDateSV();
+  const ciclos: CycleInfo[] = [];
+  let m = month, y = year;
+  for (let i = 0; i < count; i++) {
+    const lastDay = new Date(y, m + 1, 0).getDate();
+    ciclos.push({
+      id: `${y}-${(m+1).toString().padStart(2,'0')}`,
+      label: `${MONTHS[m]} 1 - ${MONTHS[m]} ${lastDay} ${y}`,
+      year: y,
+      month: m + 1,
+    });
+    if (m === 0) { m = 11; y--; } else { m--; }
+  }
+  return ciclos;
+}
+// ===== FIN CICLO MENSUAL =====
+
 import {
   Receipt,
   Loader2,
@@ -42,9 +74,9 @@ export default function CaraSuciaVouchersPage() {
 
   useEffect(() => {
     setMounted(true);
-    const recentCycles = getRecentCyclesMensual();
-    setCycles(recentCycles);
-    setSelectedCycle(recentCycles[0]?.id || "");
+    const ciclos = getUltimosCiclosMensuales();
+    setCycles(ciclos);
+    setSelectedCycle(ciclos[0]?.id || "");
   }, []);
 
   const loadVouchers = useCallback(async () => {
