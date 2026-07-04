@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { CONFIG } from "@/lib/config";
-import { saveVoucherAction, checkVoucherStatusAction } from "@/app/actions/vouchers";
+import { saveVoucherAction, checkVoucherStatusAction, notifyComprobanteAction } from "@/app/actions/vouchers";
 import { 
   Camera, 
   Upload, 
@@ -182,20 +182,15 @@ function AdjuntarContent() {
       const params = new URLSearchParams(voucherInfo as any);
       const viewLink = `${baseUrl}/vale?${params.toString()}`;
 
-      // ===== PASO 3: Enviar a Google Sheets =====
-      await fetch(CONFIG.API_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fila: voucherInfo.fila,
-          sheet: voucherInfo.sheet,
-          id: voucherInfo.id,
-          comprobante: pythonImagePath,
-          comprobanteUrl: viewLink,
-          numVale: voucherInfo.numVale,
-          metodo: "updateComprobante"
-        }),
+      // ===== PASO 3: Notificar a Google Sheets (push server-side) =====
+      notifyComprobanteAction({
+        fila: voucherInfo.fila,
+        sheet: voucherInfo.sheet,
+        id: voucherInfo.id,
+        numVale: voucherInfo.numVale,
+        comprobanteUrl: viewLink,
+      }).catch(() => {
+        console.warn("Google Sheets no respondió, pero el comprobante se guardó localmente.");
       });
       setProgress(100);
       setIsSuccess(true);

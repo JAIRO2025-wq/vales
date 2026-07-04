@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { notifyVoucherAction } from "@/app/actions/vouchers";
 import { CONFIG } from "@/lib/config";
 import {
   Camera,
@@ -207,6 +208,17 @@ function SubirVoucherContent() {
 
       setUploadedUrl(data.url);
       setIsSuccess(true);
+
+      // NOTIFICAR A GOOGLE SHEETS (push server-side)
+      notifyVoucherAction({
+        fila,
+        sheet,
+        id,
+        voucherUrl: data.url,
+      }).catch(() => {
+        console.warn("Google Sheets no respondió, pero el voucher se guardó localmente.");
+      });
+
       toast({
         title: "¡Voucher subido!",
         description: "La imagen se ha guardado correctamente.",

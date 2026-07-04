@@ -614,15 +614,10 @@ export async function deleteVoucherAction(id: string, fecha: string) {
 }
 
 /**
- * Notifica a Google Apps Script que un vale ha sido archivado.
- * Se ejecuta del lado del servidor para evitar problemas de CORS.
+ * Función base para notificar a Google Apps Script.
+ * Todas las notificaciones pasan por aquí para centralizar la lógica.
  */
-export async function notifyArchiveAction(voucherData: {
-  fila: string;
-  sheet: string;
-  id: string;
-  pdfUrl: string;
-}) {
+async function notifyGoogle(payload: Record<string, any>): Promise<{ success: boolean }> {
   try {
     const config = getServerConfig();
     const controller = new AbortController();
@@ -632,21 +627,95 @@ export async function notifyArchiveAction(voucherData: {
       await fetch(config.API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fila: voucherData.fila,
-          sheet: voucherData.sheet,
-          id: voucherData.id,
-          pdfUrl: voucherData.pdfUrl,
-          metodo: "updatePdf"
-        }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
+      return { success: true };
     } finally {
       clearTimeout(timeout);
     }
-    return { success: true };
   } catch (error) {
     console.warn('Error notificando a Google Apps Script:', error);
     return { success: false };
   }
+}
+
+/**
+ * Notifica a Google Apps Script que un vale ha sido archivado (PDF generado).
+ */
+export async function notifyArchiveAction(voucherData: {
+  fila: string;
+  sheet: string;
+  id: string;
+  pdfUrl: string;
+}) {
+  return notifyGoogle({
+    fila: voucherData.fila,
+    sheet: voucherData.sheet,
+    id: voucherData.id,
+    pdfUrl: voucherData.pdfUrl,
+    metodo: "updatePdf"
+  });
+}
+
+/**
+ * Notifica a Google Apps Script que un vale ha sido firmado.
+ */
+export async function notifySignAction(voucherData: {
+  fila: string;
+  sheet: string;
+  id: string;
+  firmado: boolean;
+  firmaUrl?: string;
+  motivoOmitido?: string;
+  autorizadoPor?: string;
+}) {
+  return notifyGoogle({
+    fila: voucherData.fila,
+    sheet: voucherData.sheet,
+    id: voucherData.id,
+    firmado: voucherData.firmado,
+    firmaUrl: voucherData.firmaUrl || '',
+    motivo: voucherData.motivoOmitido || '',
+    autorizadoPor: voucherData.autorizadoPor || '',
+    metodo: "updateFirma"
+  });
+}
+
+/**
+ * Notifica a Google Apps Script que se adjuntó un comprobante.
+ */
+export async function notifyComprobanteAction(voucherData: {
+  fila: string;
+  sheet: string;
+  id: string;
+  numVale: string;
+  comprobanteUrl: string;
+}) {
+  return notifyGoogle({
+    fila: voucherData.fila,
+    sheet: voucherData.sheet,
+    id: voucherData.id,
+    numVale: voucherData.numVale,
+    comprobanteUrl: voucherData.comprobanteUrl,
+    metodo: "updateComprobante"
+  });
+}
+
+/**
+ * Notifica a Google Apps Script que se subió un voucher (comprobante bancario).
+ */
+export async function notifyVoucherAction(voucherData: {
+  fila: string;
+  sheet: string;
+  id: string;
+  voucherUrl: string;
+}) {
+  return notifyGoogle({
+    fila: voucherData.fila,
+    sheet: voucherData.sheet,
+    id: voucherData.id,
+    voucherUrl: voucherData.voucherUrl,
+    metodo: "updateVoucher"
+  });
 }

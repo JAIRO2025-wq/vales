@@ -13,7 +13,8 @@ import {
   Download, 
   QrCode, 
   Camera,
-  Signature
+  Signature,
+  ClipboardCopy
 } from "lucide-react";
 import { checkVoucherStatusAction, savePdfAction, saveVoucherAction, notifyArchiveAction, type VoucherRecord, type VoucherStatusResult } from "@/app/actions/vouchers";
 import { useToast } from "@/hooks/use-toast";
@@ -253,6 +254,59 @@ function ValeContent() {
     toast({ title: "Link de Comprobante", description: "Copiado al portapapeles." });
   };
 
+  /** Construye el estado legible para la columna H del Excel */
+  const getEstadoTexto = (): string => {
+    if (voucherStatus?.motivoOmitido) return `⚠️ Omitido: ${voucherStatus.motivoOmitido}`;
+    if (voucherStatus?.firmado) return '✅ Firmado';
+    return '⏳ Pendiente';
+  };
+
+  /** Construye el texto del comprobante para la columna J */
+  const getComprobanteTexto = (): string => {
+    if (voucherStatus?.comprobanteUrl) return '✅ Comprobante OK';
+    return '🔴 Pendiente';
+  };
+
+  /** 
+   * Genera la fórmula HYPERLINK de Excel (formato español) para la columna I.
+   * Ej: =HIPERVINCULO("https://..."; "🔗 Ver vale firmado #3")
+   */
+  const getLinkFormula = (): string => {
+    const url = `${baseUrl}/vale?${queryParams}`;
+    const texto = voucherStatus?.firmado
+      ? `🔗 Ver vale firmado #${voucherData.numVale}`
+      : `🔗 Abrir vale #${voucherData.numVale}`;
+    return `=HIPERVINCULO("${url}"; "${texto}")`;
+  };
+
+  /** 
+   * Copia los 4 datos al portapapeles en formato TSV (tab-separated)
+   * para pegarlos directamente en Excel en 4 columnas: H, I, J, K.
+   */
+  const handleCopyExcelData = async () => {
+    const estado = getEstadoTexto();
+    const link = getLinkFormula();
+    const comprobante = getComprobanteTexto();
+    const id = voucherData.id;
+
+    // Tab-separated: al pegarlo en Excel, cada valor va en una columna distinta
+    const tsv = `${estado}\t${link}\t${comprobante}\t${id}`;
+
+    try {
+      await navigator.clipboard.writeText(tsv);
+      toast({
+        title: "📋 Datos copiados",
+        description: "Listo para pegar en Excel (4 columnas: H, I, J, K).",
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "No se pudo copiar al portapapeles.",
+      });
+    }
+  };
+
     return (
     <div className="min-h-screen bg-zinc-100 print:bg-white print:p-0">
       {isSigned && !hasDismissedModal && (
@@ -365,6 +419,21 @@ function ValeContent() {
               {voucherStatus?.hasPdf ? "Re-archivar" : "Archivar"}
             </Button>
           )}
+
+          {/* Separador antes del botón Excel */}
+          <div className="border-t border-zinc-100 pt-1 mt-1"></div>
+
+          {/* Botón copiar datos para Excel (respaldo manual) */}
+          <Button
+            onClick={handleCopyExcelData}
+            variant="outline"
+            className="w-full h-7 border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold shadow-sm"
+            style={{ fontSize: "7.5px" }}
+            title="Copia los 4 datos (Estado, Link, Comprobante, ID) para pegar en Excel"
+          >
+            <ClipboardCopy className="w-3 h-3 mr-1 text-amber-600" />
+            📋 Excel 4 cols
+          </Button>
 
           {/* Estado */}
           <div className="mt-auto pt-2 border-t border-zinc-100 space-y-1.5">

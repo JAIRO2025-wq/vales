@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SignatureCanvas } from "@/components/firma/SignatureCanvas";
 import { CONFIG } from "@/lib/config";
 import { useToast } from "@/hooks/use-toast";
-import { saveVoucherAction, checkVoucherStatusAction, type FirmaMetadata } from "@/app/actions/vouchers";
+import { saveVoucherAction, checkVoucherStatusAction, notifySignAction, type FirmaMetadata } from "@/app/actions/vouchers";
 import { verifyPinAction } from "@/app/actions/config";
 import { 
   Lock, 
@@ -213,24 +213,18 @@ function FirmaContent() {
         firmaMeta: metadata,
       });
       
-      try {
-        await fetch(CONFIG.API_URL, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fila: voucherData.fila,
-            sheet: voucherData.sheet,
-            id: voucherData.id,
-            firma: firmaPath || "",
-            motivo: skipMotivo || "",
-            autorizadoPor: authorizedUser?.name,
-            metodo: "updateFirma"
-          }),
-        });
-      } catch (e) {
+      // NOTIFICAR A GOOGLE SHEETS (push server-side, sin CORS)
+      notifySignAction({
+        fila: voucherData.fila,
+        sheet: voucherData.sheet,
+        id: voucherData.id,
+        firmado: !skipMotivo,
+        firmaUrl: firmaPath || '',
+        motivoOmitido: skipMotivo || '',
+        autorizadoPor: authorizedUser?.name || '',
+      }).catch(() => {
         console.warn("Google Sheets no respondió, pero el vale se guardó localmente.");
-      }
+      });
 
             setIsSuccess(true);
     } catch (error) {
