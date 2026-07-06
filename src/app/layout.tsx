@@ -52,12 +52,34 @@ export default function RootLayout({
                 window.addEventListener('load', function() {
                   navigator.serviceWorker.register('/sw.js').then(
                     function(registration) {
-                      console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                      console.log('SW registrado con scope:', registration.scope);
+                      // Detectar cuando hay un nuevo SW esperando activarse
+                      registration.addEventListener('updatefound', function() {
+                        var newWorker = registration.installing;
+                        if (newWorker) {
+                          newWorker.addEventListener('statechange', function() {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                              console.log('Nueva versión disponible. Recargando...');
+                              // Recargar la página para obtener el nuevo HTML con los chunks actualizados
+                              window.location.reload();
+                            }
+                          });
+                        }
+                      });
                     },
                     function(err) {
-                      console.log('ServiceWorker registration failed: ', err);
+                      console.log('Error al registrar SW:', err);
                     }
                   );
+                });
+
+                // Recargar cuando el SW tome el control (tras skipWaiting + claim)
+                var refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', function() {
+                  if (!refreshing) {
+                    refreshing = true;
+                    window.location.reload();
+                  }
                 });
               }
             `,

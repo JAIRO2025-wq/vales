@@ -14,6 +14,30 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '50mb',
     },
   },
+  // Headers para evitar caché del HTML (los chunks de _next/static ya tienen hash inmutable)
+  async headers() {
+    return [
+      {
+        source: '/:path*{.html,.php,/}',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'no-store, no-cache, must-revalidate, max-age=0',
+          },
+        ],
+      },
+      {
+        // También aplica para rutas sin extensión (páginas de Next.js)
+        source: '/((?!_next|api|favicon|icon|manifest).*)',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'no-store, no-cache, must-revalidate, max-age=0',
+          },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     return [
       {
