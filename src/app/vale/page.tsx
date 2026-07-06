@@ -50,27 +50,20 @@ function ValeContent() {
     const initVoucher = async () => {
       if (!voucherData.id) return;
       try {
-                        // Consultamos si ya existe en disco (pasando el origen real)
+        // Consultamos si ya existe en disco (búsqueda multicine)
         const existingStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
         
-        // Guardar los datos básicos del vale (sin machacar firma/comprobante si ya existen)
-        // IMPORTANTE: NO pasar firmaUrl ni comprobanteUrl resueltas - solo los datos crudos del URL
-        const newVoucher: any = {
-          ...voucherData,
-          firmado: false,
-          timestamp: new Date().toISOString()
-        };
-        // Solo si EXISTE en disco, preservamos sus datos
-        if (existingStatus) {
-          newVoucher.firmado = existingStatus.firmado;
-          newVoucher.motivoOmitido = existingStatus.motivoOmitido;
-          newVoucher.hasPdf = existingStatus.hasPdf;
-          newVoucher.autorizadoPor = existingStatus.autorizadoPor;
-          newVoucher.timestamp = existingStatus.timestamp;
-          // NO tocar firmaUrl ni comprobanteUrl - se preservan solos en saveVoucherAction
-          // porque busca por ID y mantiene los valores existentes
+        if (!existingStatus) {
+          // Solo guardar si es un vale NUEVO (primera vez que se ve en el sistema)
+          // Esto evita crear registros fantasma en ciclos incorrectos cuando
+          // la fecha no está disponible en la URL
+          const newVoucher: any = {
+            ...voucherData,
+            firmado: false,
+            timestamp: new Date().toISOString()
+          };
+          await saveVoucherAction(newVoucher);
         }
-        await saveVoucherAction(newVoucher);
 
         // Volvemos a consultar (con origen real) para tener el estado actualizado
         const finalStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);

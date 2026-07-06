@@ -443,15 +443,58 @@ export interface VoucherStatusResult extends VoucherRecord {
   comprobanteUrlRaw?: string;
 }
 
+/**
+ * Busca un voucher por ID en múltiples ciclos.
+ * Primero busca en el ciclo principal, luego en ciclos adyacentes por si el
+ * vale se guardó en un ciclo diferente (ej: por lógica Flynet o cambios en la configuración).
+ */
+async function findVoucherAcrossCycles(
+  targetId: string,
+  primaryCycleId: string,
+  idCycleHint?: string
+): Promise<{ voucher: VoucherRecord; cycleId: string } | null> {
+  // Ciclos a probar: empezamos por el primario, luego alternamos
+  const cyclesToTry = new Set<string>();
+  cyclesToTry.add(primaryCycleId);
+  if (idCycleHint && idCycleHint !== primaryCycleId) cyclesToTry.add(idCycleHint);
+
+  // Extraer año y mes del ciclo primario para calcular adyacentes
+  const [pYear, pMonth] = primaryCycleId.split('-').map(Number);
+  // Mes anterior
+  if (pMonth > 1) cyclesToTry.add(`${pYear}-${String(pMonth - 1).padStart(2, '0')}`);
+  else cyclesToTry.add(`${pYear - 1}-12`);
+  // Mes siguiente
+  if (pMonth < 12) cyclesToTry.add(`${pYear}-${String(pMonth + 1).padStart(2, '0')}`);
+  else cyclesToTry.add(`${pYear + 1}-01`);
+
+  for (const cycleId of cyclesToTry) {
+    try {
+      const vouchers = await getVouchersByCycleAction(cycleId);
+      const voucher = vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
+      if (voucher) return { voucher, cycleId };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 export async function checkVoucherStatusAction(id: string, fecha: string): Promise<VoucherStatusResult | null> {
   try {
     const branch = await extractBranchFromId(id);
-    const cycle = getCycleForBranch(fecha, branch);
-    const vouchers = await getVouchersByCycleAction(cycle.id);
+    const primaryCycle = getCycleForBranch(fecha, branch);
     const targetId = await normalizeId(id);
-    const voucher = vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
     
-    if (!voucher) return null;
+    // Extraer un hint del mes desde el ID (ej: "2026-06" de "SAN-MIGUEL-2026-06-W3...")
+    const idMonthMatch = targetId.match(/-(\d{4})-(\d{2})-/);
+    const idCycleHint = idMonthMatch ? `${idMonthMatch[1]}-${idMonthMatch[2]}` : undefined;
+    
+    // Buscar en múltiples ciclos
+    const found = await findVoucherAcrossCycles(targetId, primaryCycle.id, idCycleHint);
+    
+    if (!found) return null;
+    
+    const { voucher } = found;
     
     // Preservamos las rutas originales (sin resolver) para poder construir URLs
     // al enviar al servidor PDF, y devolvemos las versiones resueltas como URLs
@@ -468,7 +511,7 @@ export async function checkVoucherStatusAction(id: string, fecha: string): Promi
       firmaUrlRaw,
       comprobanteUrlRaw,
     };
-    } catch (e) {
+  } catch (e) {
     return null;
   }
 }

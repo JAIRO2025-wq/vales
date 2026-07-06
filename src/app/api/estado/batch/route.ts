@@ -60,38 +60,47 @@ export async function POST(request: NextRequest) {
       origin = "https://vales01.modulos.uk";
     }
 
-    // Agrupar por ciclo para leer cada archivo solo una vez
+    // Para cada ID, generar ciclos candidatos (primario + adyacentes)
     const grupos: Record<string, { id: string; fecha: string }[]> = {};
+    const idsSinResultado = new Set<string>();
 
     for (const rawId of ids) {
       const targetId = await normalizeId(rawId);
       if (!targetId) continue;
+      idsSinResultado.add(targetId);
 
       const fecha = fechas[rawId] || fechas[targetId] || '';
-      let cycleId: string;
-      let year: string;
+      let primaryCycle: { year: number; id: string };
 
       if (fecha) {
-        const cycle = getCycleFromDate(fecha);
-        cycleId = cycle.id;
-        year = cycle.year.toString();
+        primaryCycle = getCycleFromDate(fecha);
       } else {
         const yearMatch = targetId.match(/\d{4}/);
         const monthMatch = targetId.match(/-(\d{2})-/);
         if (!yearMatch || !monthMatch) {
           resultados[targetId] = { id: targetId, firmado: false, comprobante: false, error: "ID sin fecha" };
+          idsSinResultado.delete(targetId);
           continue;
         }
-        year = yearMatch[0];
-        cycleId = `${year}-${monthMatch[1]}`;
+        primaryCycle = { year: parseInt(yearMatch[0]), id: `${yearMatch[0]}-${monthMatch[1]}` };
       }
 
-      const key = `${year}/${cycleId}`;
-      if (!grupos[key]) grupos[key] = [];
-      grupos[key].push({ id: targetId, fecha });
+      // Ciclos candidatos: primario + mes anterior + mes siguiente
+      const [pYear, pMonth] = primaryCycle.id.split('-').map(Number);
+      const candidatos = [primaryCycle.id];
+      if (pMonth > 1) candidatos.push(`${pYear}-${String(pMonth - 1).padStart(2, '0')}`);
+      else candidatos.push(`${pYear - 1}-12`);
+      if (pMonth < 12) candidatos.push(`${pYear}-${String(pMonth + 1).padStart(2, '0')}`);
+      else candidatos.push(`${pYear + 1}-01`);
+
+      for (const cid of candidatos) {
+        const key = `${cid.split('-')[0]}/${cid}`;
+        if (!grupos[key]) grupos[key] = [];
+        grupos[key].push({ id: targetId, fecha });
+      }
     }
 
-    // Leer cada archivo de ciclo una sola vez
+    // Leer cada archivo de ciclo una sola vez, procesando en orden
     for (const [key, items] of Object.entries(grupos)) {
       const [year, cycleId] = key.split('/');
       const filePath = path.join(STORAGE_PATH, year, cycleId, 'vouchers.json');
@@ -101,6 +110,9 @@ export async function POST(request: NextRequest) {
         const vouchers: VoucherRecord[] = JSON.parse(content);
 
         for (const item of items) {
+          // Si ya encontramos este ID en un ciclo anterior, saltar
+          if (!idsSinResultado.has(item.id)) continue;
+
           const voucher = vouchers.find(
             v => v.id.toUpperCase().replace(/[\s_]/g, '-') === item.id
           );
@@ -108,39 +120,31 @@ export async function POST(request: NextRequest) {
           if (voucher) {
             const formatted = await formatVoucherForApi(voucher, origin);
             resultados[item.id] = formatted;
-          } else {
-            resultados[item.id] = {
-              id: item.id,
-              firmado: false,
-              comprobante: false,
-              pdfUrl: null,
-              fechaFirma: null,
-              firmante: null,
-              motivoOmitido: null,
-              concepto: null,
-              archivado: false,
-              voucherUrl: null,
-              voucherSubido: false,
-            };
+            idsSinResultado.delete(item.id);
           }
         }
       } catch {
-        // Archivo no existe → todos los IDs de este ciclo no existen
-        for (const item of items) {
-          resultados[item.id] = {
-            id: item.id,
-            firmado: false,
-            comprobante: false,
-            pdfUrl: null,
-            fechaFirma: null,
-            firmante: null,
-            motivoOmitido: null,
-            concepto: null,
-            archivado: false,
-            voucherUrl: null,
-            voucherSubido: false,
-          };
-        }
+        // Archivo no existe en este ciclo, continuar con el siguiente
+        continue;
+      }
+    }
+
+    // Los IDs que aún no tienen resultado después de buscar en todos los ciclos
+    for (const id of idsSinResultado) {
+      if (!resultados[id]) {
+        resultados[id] = {
+          id,
+          firmado: false,
+          comprobante: false,
+          pdfUrl: null,
+          fechaFirma: null,
+          firmante: null,
+          motivoOmitido: null,
+          concepto: null,
+          archivado: false,
+          voucherUrl: null,
+          voucherSubido: false,
+        };
       }
     }
 

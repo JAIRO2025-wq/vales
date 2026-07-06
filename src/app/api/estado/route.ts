@@ -70,46 +70,54 @@ export async function GET(request: NextRequest) {
     // CASO B: Consulta individual por ID
     if (rawId) {
       const targetId = await normalizeId(rawId);
-      let cycleId = "";
-      let year = "";
+      const cyclesToTry: string[] = [];
 
       // Si el script envía fecha, la usamos para ir directo a la carpeta correcta
       if (rawFecha) {
         const cycle = getCycleFromDate(rawFecha);
-        cycleId = cycle.id;
-        year = cycle.year.toString();
+        cyclesToTry.push(cycle.id);
       } else {
-        // Búsqueda inteligente por ID si no hay fecha
+        // Extraer año/mes del ID como hint inicial
         const yearMatch = targetId.match(/\d{4}/);
         const monthMatch = targetId.match(/-(\d{2})-/);
         if (!yearMatch || !monthMatch) {
           return NextResponse.json({ error: "ID sin formato de fecha" }, { status: 400 });
         }
-        year = yearMatch[0];
-        cycleId = `${year}-${monthMatch[1]}`;
+        const hintYear = yearMatch[0];
+        const hintMonth = monthMatch[1];
+        cyclesToTry.push(`${hintYear}-${hintMonth}`);
       }
 
-      const filePath = path.join(STORAGE_PATH, year, cycleId, 'vouchers.json');
+      // Agregar ciclos adyacentes por si el vale se guardó en otro ciclo (Flynet)
+      const [baseYear, baseMonth] = cyclesToTry[0].split('-').map(Number);
+      if (baseMonth > 1) cyclesToTry.push(`${baseYear}-${String(baseMonth - 1).padStart(2, '0')}`);
+      else cyclesToTry.push(`${baseYear - 1}-12`);
+      if (baseMonth < 12) cyclesToTry.push(`${baseYear}-${String(baseMonth + 1).padStart(2, '0')}`);
+      else cyclesToTry.push(`${baseYear + 1}-01`);
 
-      try {
-        const content = await fs.readFile(filePath, 'utf-8');
-        const vouchers: VoucherRecord[] = JSON.parse(content);
-        // Normalizar comparación
-        const voucher = vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
-
-        if (!voucher) {
-          return NextResponse.json({ 
-            id: targetId,
-            firmado: false,
-            comprobante: false,
-            error: "Vale no registrado" 
-          });
+      // Buscar en todos los ciclos candidatos
+      for (const cid of cyclesToTry) {
+        const filePath = path.join(STORAGE_PATH, cid.split('-')[0], cid, 'vouchers.json');
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          const vouchers: VoucherRecord[] = JSON.parse(content);
+          const voucher = vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
+          if (voucher) {
+            return NextResponse.json(await formatVoucherForApi(voucher, origin));
+          }
+        } catch {
+          // Archivo no existe en este ciclo, probar el siguiente
+          continue;
         }
-
-        return NextResponse.json(await formatVoucherForApi(voucher, origin));
-      } catch (e) {
-        return NextResponse.json({ error: `Ciclo ${cycleId} no encontrado` }, { status: 404 });
       }
+
+      // No se encontró en ningún ciclo
+      return NextResponse.json({ 
+        id: targetId,
+        firmado: false,
+        comprobante: false,
+        error: "Vale no registrado en ningún ciclo" 
+      });
     }
 
     return NextResponse.json({ error: 'Faltan parámetros' }, { status: 400 });
