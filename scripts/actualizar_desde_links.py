@@ -141,18 +141,26 @@ for params in items:
         if has_pdf:
             nuevo['hasPdf'] = True
         
-        # Determinar el ciclo correcto (Flynet: day < 20 -> mes anterior)
+        # Determinar el ciclo correcto segun la sucursal
+        # CARA SUCIA usa ciclo mensual (1ero al ultimo del mes)
+        # El resto usa ciclo Flynet (20 al 19 del siguiente)
         fecha = nuevo['fecha']
+        suc = nuevo.get('sucursal', '').upper().strip()
         try:
             parts = fecha.split('-')
             y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
-            if d < 20:
-                if m == 1:
-                    cycle_id = f'{y-1}-12'
-                else:
-                    cycle_id = f'{y}-{str(m-1).zfill(2)}'
-            else:
+            if 'CARA SUCIA' in suc:
+                # Ciclo mensual: el ciclo es el mismo mes de la fecha
                 cycle_id = f'{y}-{str(m).zfill(2)}'
+            else:
+                # Ciclo Flynet: dia < 20 -> mes anterior
+                if d < 20:
+                    if m == 1:
+                        cycle_id = f'{y-1}-12'
+                    else:
+                        cycle_id = f'{y}-{str(m-1).zfill(2)}'
+                else:
+                    cycle_id = f'{y}-{str(m).zfill(2)}'
         except:
             cycle_id = periodo
         

@@ -53,17 +53,20 @@ function ValeContent() {
         // Consultamos si ya existe en disco (búsqueda multicine)
         const existingStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
         
-        if (!existingStatus) {
-          // Solo guardar si es un vale NUEVO (primera vez que se ve en el sistema)
-          // Esto evita crear registros fantasma en ciclos incorrectos cuando
-          // la fecha no está disponible en la URL
-          const newVoucher: any = {
-            ...voucherData,
-            firmado: false,
-            timestamp: new Date().toISOString()
-          };
-          await saveVoucherAction(newVoucher);
-        }
+        // SIEMPRE guardamos/actualizamos con los datos FRESCOS de la URL.
+        // Esto permite que cuando Excel cambia el monto, concepto, entregado, etc.,
+        // el vale se actualice en el sistema con los nuevos valores.
+        // saveVoucherAction preserva firma/comprobante si ya existían.
+        const voucherToSave: any = {
+          ...voucherData,
+          firmado: existingStatus?.firmado || false,
+          firmaUrl: existingStatus?.firmaUrlRaw,
+          comprobanteUrl: existingStatus?.comprobanteUrlRaw,
+          motivoOmitido: existingStatus?.motivoOmitido,
+          autorizadoPor: existingStatus?.autorizadoPor,
+          timestamp: existingStatus?.timestamp || new Date().toISOString()
+        };
+        await saveVoucherAction(voucherToSave);
 
         // Volvemos a consultar (con origen real) para tener el estado actualizado
         const finalStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
@@ -141,7 +144,7 @@ function ValeContent() {
       otrosGastos: isOtros,
       entregadoA: voucherData.entregado,
       laSumaDe: `${displayMonto} Dólares exactos`,
-      concepto: status?.concepto || voucherData.concepto || voucherData.rubro,
+      concepto: voucherData.concepto || voucherData.rubro,
       montoTotal: displayMonto,
       reintegro: "0.00",
       solicitante: voucherData.entregado,
@@ -465,9 +468,9 @@ function ValeContent() {
                 fecha={voucherData.fecha}
                 entregado={voucherData.entregado}
                 rubro={voucherData.rubro}
-                concepto={voucherStatus?.concepto || voucherData.concepto}
+                concepto={voucherData.concepto || voucherData.rubro}
                 numVale={voucherData.numVale}
-                monto={voucherStatus?.monto || voucherData.monto}
+                monto={voucherData.monto}
                 sucursal={voucherData.sucursal}
                 sheet={voucherData.sheet}
                 signatureUrl={voucherStatus?.firmaUrl}
@@ -484,9 +487,9 @@ function ValeContent() {
               fecha={voucherData.fecha}
               entregado={voucherData.entregado}
               rubro={voucherData.rubro}
-              concepto={voucherStatus?.concepto || voucherData.concepto}
+              concepto={voucherData.concepto || voucherData.rubro}
               numVale={voucherData.numVale}
-              monto={voucherStatus?.monto || voucherData.monto}
+              monto={voucherData.monto}
               sucursal={voucherData.sucursal}
               sheet={voucherData.sheet}
               signatureUrl={voucherStatus?.firmaUrl}
