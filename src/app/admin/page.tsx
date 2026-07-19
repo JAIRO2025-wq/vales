@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
 import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
-import { getVouchersByCycleAction, formatVoucherForApi, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
+import { getVouchersByCycleActionFormatted, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -83,9 +83,9 @@ function AdminContent() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const rawData = await getVouchersByCycleAction(selectedCycle);
       const origin = typeof window !== 'undefined' ? window.location.origin : "";
-      const formatted = await Promise.all(rawData.map(v => formatVoucherForApi(v, origin)));
+      // UNA SOLA llamada al servidor para obtener y formatear todos los vales
+      const formatted = await getVouchersByCycleActionFormatted(selectedCycle, origin);
       setVales(formatted);
     } catch (err) {
       console.error("Error cargando vales:", err);
@@ -764,7 +764,27 @@ function AdminContent() {
                                 const result = await deleteSignatureAction(vale.id, vale.raw.fecha);
                                 if (result.success) {
                                   toast({ title: 'Firma eliminada' });
-                                  loadData();
+                                  // Actualizar solo este vale en el estado local (sin recargar)
+                                  setVales(prev => prev.map(v =>
+                                    v.id === vale.id ? {
+                                      ...v,
+                                      firmado: false,
+                                      fechaFirma: new Date().toISOString(),
+                                      firmante: null,
+                                      autorizadoPor: null,
+                                      motivoOmitido: null,
+                                      raw: {
+                                        ...v.raw,
+                                        firmado: false,
+                                        firmaUrl: undefined,
+                                        firmaUrlRaw: undefined,
+                                        firmaMeta: undefined,
+                                        autorizadoPor: undefined,
+                                        motivoOmitido: undefined,
+                                        timestamp: new Date().toISOString(),
+                                      }
+                                    } : v
+                                  ));
                                 } else {
                                   toast({ variant: 'destructive', title: 'Error', description: result.error });
                                 }
@@ -785,7 +805,18 @@ function AdminContent() {
                                 const result = await deleteComprobanteAction(vale.id, vale.raw.fecha);
                                 if (result.success) {
                                   toast({ title: 'Comprobante eliminado' });
-                                  loadData();
+                                  // Actualizar solo este vale en el estado local (sin recargar)
+                                  setVales(prev => prev.map(v =>
+                                    v.id === vale.id ? {
+                                      ...v,
+                                      comprobante: false,
+                                      raw: {
+                                        ...v.raw,
+                                        comprobanteUrl: undefined,
+                                        comprobanteUrlRaw: undefined,
+                                      }
+                                    } : v
+                                  ));
                                 } else {
                                   toast({ variant: 'destructive', title: 'Error', description: result.error });
                                 }
@@ -805,7 +836,8 @@ function AdminContent() {
                               const result = await deleteVoucherAction(vale.id, vale.raw.fecha);
                               if (result.success) {
                                 toast({ title: 'Vale eliminado', description: 'Registro y archivos borrados.' });
-                                loadData();
+                                // Remover solo este vale del estado local (sin recargar)
+                                setVales(prev => prev.filter(v => v.id !== vale.id));
                               } else {
                                 toast({ variant: 'destructive', title: 'Error', description: result.error });
                               }

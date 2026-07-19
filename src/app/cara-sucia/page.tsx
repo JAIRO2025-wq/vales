@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
-import { getVouchersByCycleAction, formatVoucherForApi, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
+import { getVouchersByCycleActionFormatted, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -125,11 +125,9 @@ export default function CaraSuciaDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const rawData = await getVouchersByCycleAction(selectedCycle);
-      // Filtrar solo vales de CARA SUCIA
-      const filteredRaw = rawData.filter(v => (v.sucursal || '').toUpperCase() === BRANCH);
       const origin = typeof window !== 'undefined' ? window.location.origin : "";
-      const formatted = await Promise.all(filteredRaw.map(v => formatVoucherForApi(v, origin)));
+      // UNA SOLA llamada al servidor: obtiene, filtra y formatea todos los vales de CARA SUCIA
+      const formatted = await getVouchersByCycleActionFormatted(selectedCycle, origin, BRANCH);
       setVales(formatted);
     } catch (err) {
       console.error("Error cargando vales:", err);
@@ -615,7 +613,29 @@ export default function CaraSuciaDashboard() {
                                 e.stopPropagation();
                                 if (!confirm('¿Eliminar la firma de este vale?')) return;
                                 const result = await deleteSignatureAction(vale.id, vale.raw.fecha);
-                                if (result.success) { toast({ title: 'Firma eliminada' }); loadData(); }
+                                if (result.success) {
+                                  toast({ title: 'Firma eliminada' });
+                                  setVales(prev => prev.map(v =>
+                                    v.id === vale.id ? {
+                                      ...v,
+                                      firmado: false,
+                                      fechaFirma: new Date().toISOString(),
+                                      firmante: null,
+                                      autorizadoPor: null,
+                                      motivoOmitido: null,
+                                      raw: {
+                                        ...v.raw,
+                                        firmado: false,
+                                        firmaUrl: undefined,
+                                        firmaUrlRaw: undefined,
+                                        firmaMeta: undefined,
+                                        autorizadoPor: undefined,
+                                        motivoOmitido: undefined,
+                                        timestamp: new Date().toISOString(),
+                                      }
+                                    } : v
+                                  ));
+                                }
                                 else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
                               }}>
                               <Eraser className="w-3.5 h-3.5" />
@@ -627,7 +647,20 @@ export default function CaraSuciaDashboard() {
                                 e.stopPropagation();
                                 if (!confirm('¿Eliminar el comprobante/ticket de este vale?')) return;
                                 const result = await deleteComprobanteAction(vale.id, vale.raw.fecha);
-                                if (result.success) { toast({ title: 'Comprobante eliminado' }); loadData(); }
+                                if (result.success) {
+                                  toast({ title: 'Comprobante eliminado' });
+                                  setVales(prev => prev.map(v =>
+                                    v.id === vale.id ? {
+                                      ...v,
+                                      comprobante: false,
+                                      raw: {
+                                        ...v.raw,
+                                        comprobanteUrl: undefined,
+                                        comprobanteUrlRaw: undefined,
+                                      }
+                                    } : v
+                                  ));
+                                }
                                 else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
                               }}>
                               <ImageOff className="w-3.5 h-3.5" />
@@ -638,7 +671,10 @@ export default function CaraSuciaDashboard() {
                               e.stopPropagation();
                               if (!confirm('¿Eliminar este vale permanentemente?')) return;
                               const result = await deleteVoucherAction(vale.id, vale.raw.fecha);
-                              if (result.success) { toast({ title: 'Vale eliminado' }); loadData(); }
+                              if (result.success) {
+                                toast({ title: 'Vale eliminado' });
+                                setVales(prev => prev.filter(v => v.id !== vale.id));
+                              }
                               else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
                             }}>
                             <Trash2 className="w-3.5 h-3.5" />

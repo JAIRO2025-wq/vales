@@ -14,11 +14,15 @@ import {
   QrCode, 
   Camera,
   Signature,
-  ClipboardCopy
+  ClipboardCopy,
+  UserCheck,
+  Users
 } from "lucide-react";
 import { checkVoucherStatusAction, savePdfAction, saveVoucherAction, notifyArchiveAction, type VoucherRecord, type VoucherStatusResult } from "@/app/actions/vouchers";
+import { getFirmaAutorizadaAction } from "@/app/actions/firmas-autorizadas";
 import { useToast } from "@/hooks/use-toast";
 import { CONFIG } from "@/lib/config";
+import { CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 function ValeContent() {
   const searchParams = useSearchParams();
@@ -30,8 +34,6 @@ function ValeContent() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [hasDismissedModal, setHasDismissedModal] = useState(false);
-  
-    
   
   const voucherData = {
     fila: searchParams.get("fila") || "",
@@ -45,6 +47,15 @@ function ValeContent() {
     monto: searchParams.get("monto") || "0.00",
     sucursal: searchParams.get("sucursal") || "",
   };
+  
+  // Autorizador
+  const [tipoAutorizador, setTipoAutorizador] = useState<'CAJERA' | 'JEFE' | null>(
+    voucherData.id ? null : 'CAJERA'
+  );
+  const [firmaAutorizadorUrl, setFirmaAutorizadorUrl] = useState<string | null>(null);
+  const [isSavingAutorizador, setIsSavingAutorizador] = useState(false);
+  const [autorizadorGuardado, setAutorizadorGuardado] = useState(false);
+  const [tokenJefe, setTokenJefe] = useState<string | null>(null);
 
   useEffect(() => {
     const initVoucher = async () => {
@@ -70,7 +81,16 @@ function ValeContent() {
 
         // Volvemos a consultar (con origen real) para tener el estado actualizado
         const finalStatus = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
-        if (finalStatus) setVoucherStatus(finalStatus);
+        if (finalStatus) {
+          setVoucherStatus(finalStatus);
+          // Si el vale ya tiene autorizador, cargarlo
+          if (finalStatus.tipoAutorizador) {
+            setTipoAutorizador(finalStatus.tipoAutorizador as 'CAJERA' | 'JEFE');
+            setFirmaAutorizadorUrl(finalStatus.firmaAutorizadorUrl || null);
+            setAutorizadorGuardado(true);
+            setTokenJefe(finalStatus.tokenJefe || null);
+          }
+        }
 
       } catch (e) {
         console.error("Error inicializando o actualizando vale:", e);
@@ -222,6 +242,56 @@ function ValeContent() {
       }
     };
 
+  const handleSaveAutorizador = async () => {
+    if (!tipoAutorizador || !voucherData.id) return;
+    setIsSavingAutorizador(true);
+    try {
+      // Obtener firma del autorizador desde firmas-autorizadas
+      const firma = await getFirmaAutorizadaAction(voucherData.sucursal, tipoAutorizador);
+      let firmaUrl = firma?.firmaUrl || null;
+      const autorizadorNombre = firma?.nombre || null;
+      
+      // Resolver URL: si es relativa, anteponer servidor Python
+      if (firmaUrl && !firmaUrl.startsWith('http://') && !firmaUrl.startsWith('https://') && !firmaUrl.startsWith('data:')) {
+        const pythonBase = (CONFIG.PDF_API_URL || '').endsWith('/')
+          ? CONFIG.PDF_API_URL.slice(0, -1)
+          : CONFIG.PDF_API_URL;
+        firmaUrl = firmaUrl.startsWith('/') ? `${pythonBase}${firmaUrl}` : `${pythonBase}/${firmaUrl}`;
+      }
+      
+      // Generar token para JEFE si aplica
+      const token = tipoAutorizador === 'JEFE'
+        ? `jefe-${voucherData.id}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+        : null;
+      setTokenJefe(token);
+      
+      // Guardar en el voucher
+      const voucherToSave: any = {
+        ...voucherData,
+        firmado: false,
+        tipoAutorizador,
+        firmaAutorizadorUrl: firmaUrl,
+        autorizadoPorJefe: tipoAutorizador === 'CAJERA',
+        autorizadoPor: autorizadorNombre,
+        tokenJefe: token,
+        timestamp: new Date().toISOString(),
+      };
+      await saveVoucherAction(voucherToSave);
+
+      setFirmaAutorizadorUrl(firmaUrl);
+      setAutorizadorGuardado(true);
+      
+      // Refrescar estado
+      const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
+      if (status) setVoucherStatus(status);
+    } catch (err) {
+      console.error("Error guardando autorizador:", err);
+      toast({ variant: 'destructive', title: 'Error', description: 'No se pudo guardar el autorizador.' });
+    } finally {
+      setIsSavingAutorizador(false);
+    }
+  };
+
   if (isChecking) {
     return (
       <div className="min-h-screen bg-zinc-50 flex flex-col items-center justify-center gap-4">
@@ -305,6 +375,120 @@ function ValeContent() {
 
     return (
     <div className="min-h-screen bg-zinc-100 print:bg-white print:p-0">
+      {/* Paso 1: Selección de autorizador (solo si el vale no está firmado y no tiene autorizador previo) */}
+      {!autorizadorGuardado && !isChecking && !isSigned && !voucherStatus?.tipoAutorizador && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 print:hidden">
+          <Card className="w-full max-w-md shadow-2xl border-none animate-in zoom-in duration-300">
+            <CardHeader className="text-center pb-2">
+              <CardTitle className="text-lg font-headline flex items-center justify-center gap-2">
+                <Users className="w-5 h-5 text-primary" />
+                ¿Quién autoriza el egreso?
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Selecciona quién está autorizando este vale
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 pb-6">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setTipoAutorizador('CAJERA')}
+                  className={`p-4 rounded-xl border-2 text-center transition-all ${
+                    tipoAutorizador === 'CAJERA'
+                      ? 'border-primary bg-primary/5 shadow-md'
+                      : 'border-zinc-200 hover:border-primary/30'
+                  }`}
+                >
+                  <UserCheck className="w-8 h-8 mx-auto mb-2 text-green-600" />
+                  <span className="text-sm font-bold block">Cajera</span>
+                  <span className="text-[10px] text-muted-foreground">Por defecto</span>
+                </button>
+                <button
+                  onClick={() => setTipoAutorizador('JEFE')}
+                  className={`p-4 rounded-xl border-2 text-center transition-all ${
+                    tipoAutorizador === 'JEFE'
+                      ? 'border-purple-500 bg-purple-50 shadow-md'
+                      : 'border-zinc-200 hover:border-purple-300'
+                  }`}
+                >
+                  <ShieldCheck className="w-8 h-8 mx-auto mb-2 text-purple-600" />
+                  <span className="text-sm font-bold block">Jefe de Agencia</span>
+                  <span className="text-[10px] text-muted-foreground">Requiere validación extra</span>
+                </button>
+              </div>
+              {tipoAutorizador === 'JEFE' && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[10px] text-amber-800">
+                  <strong>Importante:</strong> Al seleccionar Jefe, se generará un QR adicional que el jefe deberá escanear para autorizar. Solo después de eso podrás firmar y subir comprobante.
+                </div>
+              )}
+              <Button
+                onClick={handleSaveAutorizador}
+                disabled={!tipoAutorizador || isSavingAutorizador}
+                className="w-full h-12 text-sm font-bold"
+              >
+                {isSavingAutorizador ? (
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                ) : null}
+                {tipoAutorizador === 'JEFE' ? 'Confirmar Jefe y Generar QR' : 'Confirmar Cajera'}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* QR de autorización del Jefe (visible cuando se seleccionó JEFE y aún no autoriza) */}
+      {autorizadorGuardado && tipoAutorizador === 'JEFE' && !voucherStatus?.autorizadoPorJefe && !voucherStatus?.firmado && (
+        <div className="fixed bottom-4 right-4 z-40 print:hidden">
+          <Card className="shadow-2xl border-purple-300 border-2 animate-in slide-in-from-right duration-500">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-purple-600" />
+                <div>
+                  <p className="text-xs font-bold text-purple-800">Pendiente: Autorización de Jefe</p>
+                  <p className="text-[10px] text-muted-foreground">Envía este QR al jefe para que autorice</p>
+                </div>
+              </div>
+              <div className="bg-white rounded border shadow-sm flex justify-center p-2">
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(`${baseUrl}/autorizar-vale?token=${encodeURIComponent(tokenJefe || '')}`)}`}
+                  alt="QR Autorización Jefe"
+                  className="w-[120px] h-[120px]"
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full text-[10px]"
+                onClick={() => {
+                  const url = `${baseUrl}/autorizar-vale?token=${encodeURIComponent(tokenJefe || '')}`;
+                  navigator.clipboard.writeText(url);
+                  toast({ title: 'Link copiado', description: 'Envía este link al jefe para autorizar.' });
+                }}
+              >
+                <ClipboardCopy className="w-3 h-3 mr-1" /> Copiar link de autorización
+              </Button>
+              <p className="text-[8px] text-muted-foreground text-center">
+                El vale se actualizará automáticamente cuando el jefe autorice
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Bloqueo: si JEFE seleccionado pero no autorizado, bloquear firma/comprobante */}
+      {autorizadorGuardado && tipoAutorizador === 'JEFE' && !voucherStatus?.autorizadoPorJefe && !voucherStatus?.firmado && (
+        <div className="fixed inset-0 z-30 pointer-events-none print:hidden">
+          <div className="absolute inset-0 bg-black/5" />
+          <div className="absolute top-4 left-1/2 -translate-x-1/2">
+            <div className="bg-amber-50 border-2 border-amber-400 rounded-lg px-4 py-2 shadow-lg">
+              <p className="text-xs font-bold text-amber-800 flex items-center gap-2">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Esperando autorización del Jefe de Agencia...
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isSigned && !hasDismissedModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 print:hidden">
           <Card className="w-full max-w-sm shadow-2xl border-none animate-in zoom-in duration-300">
@@ -477,6 +661,9 @@ function ValeContent() {
                 comprobanteUrl={voucherStatus?.comprobanteUrl}
                 motivoOmitido={voucherStatus?.motivoOmitido}
                 autorizadoPor={voucherStatus?.autorizadoPor}
+                tipoAutorizador={tipoAutorizador}
+                firmaAutorizadorUrl={firmaAutorizadorUrl || voucherStatus?.firmaAutorizadorUrl}
+                autorizadoPorJefe={voucherStatus?.autorizadoPorJefe}
               />
             </div>
           </div>
@@ -496,6 +683,9 @@ function ValeContent() {
               comprobanteUrl={voucherStatus?.comprobanteUrl}
               motivoOmitido={voucherStatus?.motivoOmitido}
               autorizadoPor={voucherStatus?.autorizadoPor}
+              tipoAutorizador={tipoAutorizador}
+              firmaAutorizadorUrl={firmaAutorizadorUrl || voucherStatus?.firmaAutorizadorUrl}
+              autorizadoPorJefe={voucherStatus?.autorizadoPorJefe}
             />
           </div>
         </div>

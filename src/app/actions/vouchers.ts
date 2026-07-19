@@ -6,14 +6,32 @@ import { revalidatePath } from 'next/cache';
 import { getCurrentCycle, getCycleFromDate } from '@/lib/cycles';
 import { getCycleFromDateMensual } from '@/lib/cycles-mensual';
 import { getServerConfig } from '@/lib/config-server';
+import type { AppConfig } from '@/lib/config';
 
 /**
  * Obtiene el ciclo contable correcto según la sucursal.
- * - CARA SUCIA → ciclo mensual (cycles-mensual.ts)
- * - Otras → ciclo Flynet (cycles.ts)
+ * 
+ * Lee la configuración CICLOS para determinar si una sucursal
+ * usa ciclo mensual o Flynet. Si no está en CICLOS, usa Flynet.
+ * 
+ * La comparación es case-insensitive.
  */
 function getCycleForBranch(fecha: string, branch?: string) {
-  if (branch === 'CARA SUCIA') return getCycleFromDateMensual(fecha);
+  const branchUpper = (branch || '').trim().toUpperCase();
+  
+  try {
+    const config = getServerConfig();
+    const ciclos = config.CICLOS || {};
+    // Buscar en CICLOS de forma case-insensitive
+    for (const [key, cfg] of Object.entries(ciclos)) {
+      if (key.trim().toUpperCase() === branchUpper && cfg.tipo === 'mensual') {
+        return getCycleFromDateMensual(fecha);
+      }
+    }
+  } catch {
+    // Si falla la lectura de config, usar Flynet
+  }
+  
   return getCycleFromDate(fecha);
 }
 
@@ -47,6 +65,14 @@ export interface VoucherRecord {
   firmaUrlRaw?: string;
   /** Ruta original del comprobante sin resolver (para construir URLs al servidor PDF) */
   comprobanteUrlRaw?: string;
+  /** Quién autoriza este vale: CAJERA o JEFE */
+  tipoAutorizador?: 'CAJERA' | 'JEFE';
+  /** URL de la firma del autorizador (cajera o jefe) */
+  firmaAutorizadorUrl?: string;
+  /** Indica si el jefe ya autorizó (para flujo JEFE) */
+  autorizadoPorJefe?: boolean;
+  /** Token para que el jefe pueda autorizar este vale */
+  tokenJefe?: string;
 }
 
 /** Información del dispositivo desde donde se firmó el vale */
@@ -83,6 +109,14 @@ export interface FormattedVoucher {
   voucherUrl: string | null;
   /** Indica si el voucher ya fue subido */
   voucherSubido: boolean;
+  /** Quién autoriza: CAJERA o JEFE */
+  tipoAutorizador: 'CAJERA' | 'JEFE' | null;
+  /** URL de la firma del autorizador */
+  firmaAutorizadorUrl: string | null;
+  /** Si el jefe ya autorizó (flujo JEFE) */
+  autorizadoPorJefe: boolean;
+  /** Token para autorización del jefe */
+  tokenJefe: string | null;
   raw: VoucherRecord;
 }
 
@@ -105,11 +139,15 @@ export async function extractBranchFromId(id: string): Promise<string | undefine
   if (!match) return undefined;
   // Revertir guiones a espacios (para sucursales compuestas como CARA SUCIA)
   const branch = match[1].replace(/-/g, ' ');
-  // Verificar si existe en la configuración de ciclos
+  // Verificar si existe en la configuración de ciclos (case-insensitive)
   try {
     const config = getServerConfig();
     const ciclos = config.CICLOS || {};
-    return ciclos[branch] ? branch : undefined;
+    const branchUpper = branch.toUpperCase();
+    for (const key of Object.keys(ciclos)) {
+      if (key.trim().toUpperCase() === branchUpper) return key.trim();
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -152,8 +190,14 @@ function setCache(key: string, data: string): void {
  * 
  * IMPORTANTE: Ya NO convertimos archivos a base64. Usamos URLs directas.
  * Esto reduce drásticamente el tiempo de carga y el tamaño de la respuesta.
+ * 
+ * @param preloadedConfig - Configuración ya cargada (evita leer el disco N veces en lote)
  */
-async function resolveImageUrl(relativePath: string | undefined, fecha: string): Promise<string | undefined> {
+async function resolveImageUrl(
+  relativePath: string | undefined,
+  fecha: string,
+  preloadedConfig?: AppConfig
+): Promise<string | undefined> {
   if (!relativePath) return undefined;
 
   // 1. Ya es URL absoluta → devolver tal cual
@@ -169,7 +213,7 @@ async function resolveImageUrl(relativePath: string | undefined, fecha: string):
     if (cached) return cached;
 
     try {
-      const config = getServerConfig();
+      const config = preloadedConfig || getServerConfig();
       const baseUrl = config.PDF_API_URL.endsWith('/') ? config.PDF_API_URL.slice(0, -1) : config.PDF_API_URL;
       const url = `${baseUrl}${relativePath}`;
       setCache(cacheKey, url);
@@ -242,9 +286,17 @@ async function resolveImageBase64(relativePath: string | undefined, fecha: strin
 }
 
 /**
- * Formatea un vale para que la App y la API hablen el mismo idioma
+ * Formatea un vale para que la App y la API hablen el mismo idioma.
+ * 
+ * @param voucher - Registro del vale
+ * @param origin - Origen HTTP (para construir URLs absolutas)
+ * @param preloadedConfig - Config ya cargada (opcional, evita leer disco N veces en lote)
  */
-export async function formatVoucherForApi(voucher: VoucherRecord, origin: string): Promise<FormattedVoucher> {
+export async function formatVoucherForApi(
+  voucher: VoucherRecord,
+  origin: string,
+  preloadedConfig?: AppConfig
+): Promise<FormattedVoucher> {
   const params = new URLSearchParams();
   params.set("fila", voucher.fila || "");
   params.set("sheet", voucher.sheet || "");
@@ -260,8 +312,8 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
   const auditUrl = `${origin}/vale?${params.toString()}`;
 
     // Resolver imágenes a URLs (YA NO usamos base64 para no saturar)
-    const firmaUrlResuelta = await resolveImageUrl(voucher.firmaUrl, voucher.fecha);
-    const comprobanteUrlResuelto = await resolveImageUrl(voucher.comprobanteUrl, voucher.fecha);
+    const firmaUrlResuelta = await resolveImageUrl(voucher.firmaUrl, voucher.fecha, preloadedConfig);
+    const comprobanteUrlResuelto = await resolveImageUrl(voucher.comprobanteUrl, voucher.fecha, preloadedConfig);
 
     // Resolver URL del voucher si existe
     let voucherUrl: string | null = null;
@@ -273,6 +325,25 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
       } else {
         // Ruta relativa, construir URL completa
         voucherUrl = `${origin}/api/imagenes?fecha=${encodeURIComponent(voucher.fecha)}&file=${encodeURIComponent(voucher.voucherUrl)}`;
+      }
+    }
+
+    // Resolver firma del autorizador (cajera/jefe) a URL completa
+    let firmaAutorizadorResuelta: string | null = null;
+    if (voucher.firmaAutorizadorUrl) {
+      if (voucher.firmaAutorizadorUrl.startsWith('http://') || voucher.firmaAutorizadorUrl.startsWith('https://') || voucher.firmaAutorizadorUrl.startsWith('data:')) {
+        firmaAutorizadorResuelta = voucher.firmaAutorizadorUrl;
+      } else if (voucher.firmaAutorizadorUrl.startsWith(PYTHON_STORAGE_PREFIX)) {
+        // Ruta del servidor Python → construir URL completa
+        try {
+          const config = preloadedConfig || getServerConfig();
+          const baseUrl = config.PDF_API_URL.endsWith('/') ? config.PDF_API_URL.slice(0, -1) : config.PDF_API_URL;
+          firmaAutorizadorResuelta = `${baseUrl}${voucher.firmaAutorizadorUrl}`;
+        } catch {
+          firmaAutorizadorResuelta = voucher.firmaAutorizadorUrl;
+        }
+      } else {
+        firmaAutorizadorResuelta = voucher.firmaAutorizadorUrl;
       }
     }
 
@@ -295,6 +366,10 @@ export async function formatVoucherForApi(voucher: VoucherRecord, origin: string
       archivado: !!voucher.hasPdf,
       voucherUrl,
       voucherSubido: !!(voucher.voucherUrl || voucher.voucherSubido),
+      tipoAutorizador: voucher.tipoAutorizador || null,
+      firmaAutorizadorUrl: firmaAutorizadorResuelta,
+      autorizadoPorJefe: !!voucher.autorizadoPorJefe,
+      tokenJefe: voucher.tokenJefe || null,
       raw: {
         ...voucher,
         firmaUrl: firmaUrlResuelta,
@@ -431,6 +506,49 @@ export async function getVouchersByCycleAction(cycleId: string) {
     const filePath = path.join(STORAGE_PATH, year, cycleId, 'vouchers.json');
     const content = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(content) as VoucherRecord[];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Obtiene y formatea TODOS los vales de un ciclo en UNA SOLA llamada al servidor.
+ * 
+ * Antes: getVouchersByCycleAction() + N llamadas a formatVoucherForApi() (una por vale)
+ * Ahora: getVouchersByCycleActionFormatted() → 1 sola llamada
+ * 
+ * Esto elimina el overhead de N peticiones HTTP independientes (Server Actions),
+ * que era la causa principal de la lentitud en la carga de datos.
+ * 
+ * @param cycleId - ID del ciclo (YYYY-MM)
+ * @param origin - Origen HTTP (window.location.origin)
+ * @param filterSucursal - (Opcional) Filtrar por sucursal (ej: "CARA SUCIA")
+ */
+export async function getVouchersByCycleActionFormatted(
+  cycleId: string,
+  origin: string,
+  filterSucursal?: string
+): Promise<FormattedVoucher[]> {
+  try {
+    const year = cycleId.split('-')[0];
+    const filePath = path.join(STORAGE_PATH, year, cycleId, 'vouchers.json');
+    const content = await fs.readFile(filePath, 'utf-8');
+    const vouchers: VoucherRecord[] = JSON.parse(content);
+
+    // Cargar la config UNA SOLA VEZ para todo el lote
+    const config = getServerConfig();
+
+    const formatted: FormattedVoucher[] = [];
+    for (const voucher of vouchers) {
+      // Filtrar por sucursal si se especificó
+      if (filterSucursal && (voucher.sucursal || '').toUpperCase() !== filterSucursal.toUpperCase()) {
+        continue;
+      }
+      // Formatear en el servidor (sin HTTP extra)
+      formatted.push(await formatVoucherForApi(voucher, origin, config));
+    }
+
+    return formatted;
   } catch (e) {
     return [];
   }
@@ -761,4 +879,61 @@ export async function notifyVoucherAction(voucherData: {
     voucherUrl: voucherData.voucherUrl,
     metodo: "updateVoucher"
   });
+}
+
+/**
+ * Busca un vale por su tokenJefe y autoriza al jefe (flujo de doble autorización).
+ * Escanea todos los ciclos y sucursales hasta encontrar el vale con el token.
+ */
+export async function authorizeVoucherByTokenAction(token: string) {
+  if (!token) return { success: false, error: 'Token inválido' };
+
+  try {
+    const storagePath = path.join(STORAGE_PATH);
+    
+    // Buscar en todos los años y ciclos
+    const years = await fs.readdir(storagePath, { withFileTypes: true });
+    
+    for (const yearDir of years) {
+      if (!yearDir.isDirectory()) continue;
+      const yearPath = path.join(storagePath, yearDir.name);
+      const cycles = await fs.readdir(yearPath, { withFileTypes: true });
+      
+      for (const cycleDir of cycles) {
+        if (!cycleDir.isDirectory()) continue;
+        const jsonPath = path.join(yearPath, cycleDir.name, 'vouchers.json');
+        
+        try {
+          const content = await fs.readFile(jsonPath, 'utf-8');
+          const vouchers: VoucherRecord[] = JSON.parse(content);
+          
+          const idx = vouchers.findIndex(v => v.tokenJefe === token);
+          if (idx >= 0) {
+            const voucher = vouchers[idx];
+            voucher.autorizadoPorJefe = true;
+            vouchers[idx] = voucher;
+            
+            await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
+            
+            return {
+              success: true,
+              voucher: {
+                id: voucher.id,
+                sucursal: voucher.sucursal,
+                numVale: voucher.numVale,
+                entregado: voucher.entregado,
+              }
+            };
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+    
+    return { success: false, error: 'Vale no encontrado para este token' };
+  } catch (error) {
+    console.error('Error al autorizar vale por token:', error);
+    return { success: false, error: (error as Error).message };
+  }
 }
