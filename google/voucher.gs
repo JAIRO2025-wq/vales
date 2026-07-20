@@ -13,15 +13,26 @@ function onEdit(e) {
   var col = range.getColumn();
   var valor = e.value;
   
-  // Solo actuar si cambió la columna M (lista desplegable) - ahora es 13
-  if (col !== 13 || fila <= 1) return;
+  if (fila <= 1) return;
   
-  if (valor === 'Link') {
-    generarLinkVoucher(sheet, fila);
-  } else if (valor === 'Sin voucher') {
-    // Limpiar enlace y estado
-    sheet.getRange(fila, 14).clearContent(); // Columna N
-    sheet.getRange(fila, 15).clearContent(); // Columna O
+  // Columna M (13): lista desplegable manual
+  if (col === 13) {
+    if (valor === 'Link') {
+      generarLinkVoucher(sheet, fila);
+    } else if (valor === 'Sin voucher') {
+      // Limpiar enlace y estado
+      sheet.getRange(fila, 14).clearContent(); // Columna N
+      sheet.getRange(fila, 15).clearContent(); // Columna O
+    }
+  }
+  
+  // Columna A (1): si cambia la fecha del vale, regenerar link automáticamente
+  // para que el ID refleje la nueva fecha y se considere un voucher nuevo
+  if (col === 1) {
+    var estadoActual = sheet.getRange(fila, 13).getValue();
+    if (estadoActual === 'Link') {
+      generarLinkVoucher(sheet, fila);
+    }
   }
 }
 

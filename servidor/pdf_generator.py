@@ -1,6 +1,7 @@
 import base64
 import io
 import urllib.request
+import urllib.parse
 from io import BytesIO
 from pathlib import Path
 from PIL import Image
@@ -126,8 +127,10 @@ def resolve_image_data(image_value, label='imagen'):
     # === PASO 3: Si es una URL http/https ===
     if isinstance(resolved, str) and (resolved.startswith('http://') or resolved.startswith('https://')):
         try:
+            # Quote spaces y caracteres especiales en la URL
+            quoted_url = urllib.parse.quote(resolved, safe=':/?&=')
             print(f'[PDF] {label}: Descargando desde URL (timeout=30s)...')
-            with urllib.request.urlopen(resolved, timeout=30) as response:
+            with urllib.request.urlopen(quoted_url, timeout=30) as response:
                 data = response.read()
                 print(f'[PDF] {label}: Descargados {len(data)} bytes desde URL')
                 return data
@@ -335,8 +338,9 @@ def create_voucher_pdf(data=None, output_path=None):
     c.setFont('Helvetica-Bold', 10)
     c.drawString(autoriza_x, y + box_height + 15, 'Autoriza')
     c.setFont('Helvetica', 8)
-    c.drawString(autoriza_x, y + box_height + 5, 'Vicente Chicas')
+    c.drawString(autoriza_x, y + box_height + 5, data.get('autoriza', 'Nombre y firma'))
     c.rect(autoriza_x, y, box_width, box_height)
+    draw_signature_image(c, autoriza_x + 5, y + 8, box_width - 10, box_height - 18, data.get('firmaAutorizador'), label='firma autorizador')
     if data.get('autoriza'):
         c.setFont('Helvetica-Bold', 8)
         c.drawCentredString(autoriza_x + (box_width / 2), y + 5, data.get('autoriza'))
@@ -346,6 +350,49 @@ def create_voucher_pdf(data=None, output_path=None):
     c.line(LEFT, y, RIGHT, y)
     c.setDash(1, 0)
 
+    # ===== SECCIÓN DE AUDITORÍA (página 1, abajo del vale) =====
+    audit_y = y - 25
+    c.setFont('Helvetica-Bold', 7)
+    c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.drawString(LEFT, audit_y, 'AUDITORÍA')
+    c.setDash(2, 2)
+    c.line(LEFT + 45, audit_y + 3, RIGHT, audit_y + 3)
+    c.setDash(1, 0)
+    
+    audit_y -= 12
+    c.setFont('Helvetica', 6)
+    line_h = 10
+    
+    def audit_line(label, value):
+        nonlocal audit_y
+        c.setFont('Helvetica-Bold', 6)
+        c.drawString(LEFT, audit_y, label)
+        c.setFont('Helvetica', 6)
+        c.drawString(LEFT + 80, audit_y, value or '—')
+        audit_y -= line_h
+
+    audit_line('ID Vale:', data.get('id', ''))
+    audit_line('Sucursal:', data.get('sucursal', ''))
+    audit_line('PDF generado:', data.get('fechaGeneracion', ''))
+    audit_line('Firmado:', data.get('fechaFirma') or ('Pendiente' if not data.get('fechaFirma') else data.get('fechaFirma')))
+    if data.get('dispositivoFirma'):
+        audit_line('Dispositivo:', data.get('dispositivoFirma', ''))
+    audit_line('Comprobante:', 'Adjuntado' if data.get('tieneComprobante') else 'No adjuntado')
+    if data.get('comprobanteTimestamp'):
+        audit_y += line_h  # misma línea visual
+        c.setFont('Helvetica', 5)
+        c.setFillColorRGB(0.5, 0.5, 0.5)
+        c.drawString(LEFT + 80, audit_y, data.get('comprobanteTimestamp', '')[:19].replace('T', ' '))
+        audit_y -= line_h
+    audit_line('Autorizado por:', f"{data.get('autoriza', '')} ({data.get('tipoAutorizador', 'N/A')})" if data.get('tipoAutorizador') else data.get('autoriza', ''))
+    
+    # Marca de agua pequeña al final
+    audit_y -= 8
+    c.setFont('Helvetica', 5)
+    c.setFillColorRGB(0.7, 0.7, 0.7)
+    c.drawString(LEFT, audit_y, 'Flynet S.A. de C.V. — Sistema de Vales Digitales — Documento generado automáticamente')
+
+    # Página 2: Comprobante (si existe)
     comprobante = data.get('comprobante')
     if comprobante:
         c.showPage()

@@ -16,7 +16,8 @@ import {
   Signature,
   ClipboardCopy,
   UserCheck,
-  Users
+  Users,
+  Save
 } from "lucide-react";
 import { checkVoucherStatusAction, savePdfAction, saveVoucherAction, notifyArchiveAction, type VoucherRecord, type VoucherStatusResult } from "@/app/actions/vouchers";
 import { getFirmaAutorizadaAction } from "@/app/actions/firmas-autorizadas";
@@ -34,6 +35,8 @@ function ValeContent() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSavingPdf, setIsSavingPdf] = useState(false);
   const [hasDismissedModal, setHasDismissedModal] = useState(false);
+  const [savedPdfUrl, setSavedPdfUrl] = useState<string | null>(null);
+  const [isGenerandoPdf, setIsGenerandoPdf] = useState(false);
   
   const voucherData = {
     fila: searchParams.get("fila") || "",
@@ -121,13 +124,26 @@ function ValeContent() {
     if (!rawPath) return null;
     // Si ya es una URL absoluta, enviarla tal cual
     if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) {
+      // Si la URL apunta al storage del servidor Python, extraer la ruta relativa
+      // para que el servidor la resuelva localmente (evita descargas HTTP innecesarias
+      // y problemas con espacios en nombres de archivo)
+      if (rawPath.includes('/storage/imagenes/')) {
+        const match = rawPath.match(/\/storage\/imagenes\/[^?#]+/);
+        if (match) return match[0];
+      }
       return rawPath;
     }
     // Si es un base64 (legacy), enviarlo tal cual
     if (rawPath.startsWith('data:')) {
       return rawPath;
     }
-    // Convertir rutas del storage local a URLs de la API de imágenes
+    // Si la ruta es del storage del servidor Python (/storage/imagenes/...),
+    // enviarla tal cual. El servidor Python ya sabe resolver estas rutas
+    // localmente (app.py → _resolve_image_path).
+    if (rawPath.startsWith('/storage/')) {
+      return rawPath;
+    }
+    // Convertir rutas del storage local de Next.js a URLs de la API de imágenes
     // para que el servidor Python pueda descargarlas por HTTP
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
     const fechaParam = fecha || voucherData.fecha;
@@ -154,6 +170,21 @@ function ValeContent() {
     const isOtros = sheetUpper.includes("OTROS");
     const displayMonto = voucherData.monto ? voucherData.monto.replace(/[^\d.]/g, "") : "0.00";
 
+    // Datos de auditoría
+    const ahora = new Date();
+    const fechaGeneracion = ahora.toLocaleDateString('es-SV', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+      ' ' + ahora.toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    let fechaFirma = '';
+    let dispositivoFirma = '';
+    if (status?.firmaMeta?.fechaHora) {
+      const f = new Date(status.firmaMeta.fechaHora);
+      fechaFirma = f.toLocaleDateString('es-SV', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+        ' ' + f.toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      dispositivoFirma = status.firmaMeta.esMovil ? 'Móvil' : 'Escritorio';
+      if (status.firmaMeta.plataforma) dispositivoFirma += ' · ' + status.firmaMeta.plataforma;
+    }
+
     return {
       id: status?.id || voucherData.id,
       numero: voucherData.numVale || "---",
@@ -170,7 +201,16 @@ function ValeContent() {
       solicitante: voucherData.entregado,
       autoriza: status?.autorizadoPor || voucherData.sucursal,
       firmaSolicitante: prepareImageValue(status?.firmaUrlRaw, status?.fecha),
-      comprobante: prepareImageValue(status?.comprobanteUrlRaw, status?.fecha)
+      comprobante: prepareImageValue(status?.comprobanteUrlRaw, status?.fecha),
+      firmaAutorizador: prepareImageValue(status?.firmaAutorizadorUrl, status?.fecha),
+      // Auditoría
+      fechaGeneracion,
+      fechaFirma,
+      dispositivoFirma,
+      tieneComprobante: !!status?.comprobanteUrl,
+      comprobanteTimestamp: status?.comprobanteTimestamp || '',
+      tipoAutorizador: status?.tipoAutorizador || null,
+      sucursal: voucherData.sucursal,
     };
   };
 
@@ -242,6 +282,40 @@ function ValeContent() {
       }
     };
 
+  const handleGuardarVale = async () => {
+    setIsGenerandoPdf(true);
+    try {
+      const payload = preparePayload();
+      const baseApi = CONFIG.PDF_API_URL.endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+    
+      const response = await fetch(`${baseApi}/generate-vale`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error("Error en el servidor de PDF");
+      const data = await response.json();
+      if (data.pdf_url) {
+        setSavedPdfUrl(data.pdf_url);
+        window.open(data.pdf_url, '_blank');
+        toast({ title: "Vale Guardado", description: "PDF generado exitosamente." });
+      }
+    } catch (err) {
+      console.error(err);
+      toast({ variant: "destructive", title: "Error", description: "No se pudo conectar con el motor de PDF." });
+    } finally {
+      setIsGenerandoPdf(false);
+    }
+  };
+
+  const handleCopyPdfLink = () => {
+    if (savedPdfUrl) {
+      const formula = `=HYPERLINK("${savedPdfUrl}"; "📄 VER PDF")`;
+      navigator.clipboard.writeText(formula);
+      toast({ title: "Link Copiado", description: "Pégalo en tu Excel." });
+    }
+  };
+
   const handleSaveAutorizador = async () => {
     if (!tipoAutorizador || !voucherData.id) return;
     setIsSavingAutorizador(true);
@@ -249,7 +323,16 @@ function ValeContent() {
       // Obtener firma del autorizador desde firmas-autorizadas
       const firma = await getFirmaAutorizadaAction(voucherData.sucursal, tipoAutorizador);
       let firmaUrl = firma?.firmaUrl || null;
-      const autorizadorNombre = firma?.nombre || null;
+      let autorizadorNombre = firma?.nombre || null;
+      
+      // Fallback: si no hay firma registrada, buscar el nombre desde PINES
+      if (!autorizadorNombre) {
+        const pinesEntry = Object.entries(CONFIG.PINES).find(([_, data]) => 
+          data.role === tipoAutorizador && 
+          (data.branch || '').toUpperCase() === voucherData.sucursal.toUpperCase()
+        );
+        if (pinesEntry) autorizadorNombre = pinesEntry[0];
+      }
       
       // Resolver URL: si es relativa, anteponer servidor Python
       if (firmaUrl && !firmaUrl.startsWith('http://') && !firmaUrl.startsWith('https://') && !firmaUrl.startsWith('data:')) {
@@ -611,6 +694,38 @@ function ValeContent() {
               Cambiar quien autoriza
             </Button>
           )}
+
+          {/* Botón Guardar - Genera PDF y da link para copiar */}
+          {!savedPdfUrl ? (
+            <Button 
+              onClick={handleGuardarVale} 
+              disabled={isGenerandoPdf} 
+              className="w-full h-9 bg-green-600 hover:bg-green-700 text-white font-bold shadow-sm"
+              style={{ fontSize: "10px" }}
+            >
+              {isGenerandoPdf ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Save className="w-3 h-3 mr-1" />}
+              Guardar
+            </Button>
+          ) : (
+            <div className="space-y-1.5">
+              <div className="bg-green-50 border border-green-200 rounded p-2">
+                <p className="text-[7px] font-bold text-green-700 mb-1">Vale guardado</p>
+                <p className="text-[6px] text-green-600 truncate">{savedPdfUrl}</p>
+              </div>
+              <Button
+                onClick={handleCopyPdfLink}
+                variant="outline"
+                className="w-full h-7 border-green-300 bg-green-50 hover:bg-green-100 text-green-700 font-bold"
+                style={{ fontSize: "8px" }}
+              >
+                <ClipboardCopy className="w-3 h-3 mr-1" />
+                Copiar link
+              </Button>
+            </div>
+          )}
+
+          {/* Separador */}
+          <div className="border-t border-zinc-100 pt-1 mt-1"></div>
 
           {/* Botones de acción compactos */}
           <Button 

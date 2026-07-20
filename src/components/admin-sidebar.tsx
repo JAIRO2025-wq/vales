@@ -9,7 +9,8 @@ import {
   Settings,
   LogOut,
   Receipt,
-  ExternalLink
+  ExternalLink,
+  FileDown
 } from "lucide-react";
 import { 
   Sidebar, 
@@ -83,6 +84,14 @@ export function AdminSidebar({ config }: AdminSidebarProps) {
                 <Link href="/cajas">
                   <Wallet />
                   <span>Resumen de Cajas</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname.startsWith("/admin/centro-descargas")} tooltip="Centro de Descargas">
+                <Link href="/admin/centro-descargas">
+                  <FileDown />
+                  <span>Centro de Descargas</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

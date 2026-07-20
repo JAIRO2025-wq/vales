@@ -65,6 +65,8 @@ export interface VoucherRecord {
   firmaUrlRaw?: string;
   /** Ruta original del comprobante sin resolver (para construir URLs al servidor PDF) */
   comprobanteUrlRaw?: string;
+  /** Fecha y hora en que se subió el comprobante */
+  comprobanteTimestamp?: string;
   /** Quién autoriza este vale: CAJERA o JEFE */
   tipoAutorizador?: 'CAJERA' | 'JEFE';
   /** URL de la firma del autorizador (cajera o jefe) */

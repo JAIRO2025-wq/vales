@@ -176,6 +176,7 @@ function AdjuntarContent() {
       const saveResult = await saveVoucherAction({
         ...voucherInfo,
         comprobanteUrl: pythonImagePath,
+        comprobanteTimestamp: new Date().toISOString(),
         timestamp: new Date().toISOString()
       } as any);
 

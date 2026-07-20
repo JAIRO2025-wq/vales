@@ -27,7 +27,7 @@ app = FastAPI(title='Vale PDF Generator')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=['*'],
     allow_headers=['*'],
     expose_headers=['*'],
@@ -53,6 +53,15 @@ class ValeRequest(BaseModel):
     autoriza: Optional[str] = '______________________'
     firmaSolicitante: Optional[str] = None
     comprobante: Optional[str] = None
+    firmaAutorizador: Optional[str] = None
+    # Auditoría
+    fechaGeneracion: Optional[str] = None
+    fechaFirma: Optional[str] = None
+    dispositivoFirma: Optional[str] = None
+    tieneComprobante: Optional[bool] = False
+    comprobanteTimestamp: Optional[str] = None
+    tipoAutorizador: Optional[str] = None
+    sucursal: Optional[str] = None
 
 # ============================================================
 # FUNCIONES AUXILIARES
@@ -74,10 +83,14 @@ def get_output_pdf_path(params: dict, index: Optional[int] = None) -> str:
     o de los campos fecha y booleanos del payload.
     """
     # ── Base filename ──
-    if params.get('id'):
+    # Si hay número de vale, usarlo como nombre del archivo para descargas ordenadas
+    numero = (params.get('numero') or '').strip()
+    if numero and numero != '---':
+        file_base = safe_filename(numero)
+    elif params.get('id'):
         file_base = safe_filename(params['id'])
     else:
-        file_base = safe_filename(params.get('numero', 'vale'))
+        file_base = safe_filename(numero or 'vale')
         if index is None:
             file_base = f"{file_base}-{int(time.time())}"
         else:
@@ -270,12 +283,15 @@ async def generate_vale(request: Request, payload: ValeRequest):
     # El servidor es lo suficientemente inteligente para resolverlas.
     firma_original = params.get('firmaSolicitante')
     comprobante_original = params.get('comprobante')
+    firma_autorizador_original = params.get('firmaAutorizador')
     params['firmaSolicitante'] = _resolve_image_path(firma_original)
     params['comprobante'] = _resolve_image_path(comprobante_original)
+    params['firmaAutorizador'] = _resolve_image_path(firma_autorizador_original)
 
     print(f'[APP] Generando PDF para vale {params.get("id", "desconocido")}')
     print(f'[APP]   Firma:   orig="{firma_original}" -> resuelto="{params["firmaSolicitante"]}"')
     print(f'[APP]   Comprobante: orig="{comprobante_original}" -> resuelto="{params["comprobante"]}"')
+    print(f'[APP]   Firma Autorizador: orig="{firma_autorizador_original}" -> resuelto="{params["firmaAutorizador"]}"')
 
     relative_path = get_output_pdf_path(params)
     output_path = os.path.join(OUTPUT_DIR, relative_path)
@@ -346,9 +362,7 @@ async def get_pdf(pdf_file_name: str):
     file_path = os.path.join(OUTPUT_DIR, pdf_file_name)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail='PDF no encontrado')
-    # Usar solo el nombre base para el filename de descarga
-    download_name = os.path.basename(pdf_file_name)
-    return FileResponse(file_path, media_type='application/pdf', filename=download_name)
+    return FileResponse(file_path, media_type='application/pdf')
 
 @app.get('/zip/{zip_file_name}')
 async def get_zip(zip_file_name: str):
