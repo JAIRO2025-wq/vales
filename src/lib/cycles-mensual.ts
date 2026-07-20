@@ -50,18 +50,29 @@ export function getCurrentCycleMensual(): CycleInfo {
 }
 
 /**
- * Genera una lista de los últimos N ciclos mensuales para el selector.
+ * Genera una lista de ciclos mensuales para el selector: actual + 5 anteriores + 1 siguiente.
+ * Incluye el siguiente ciclo para vales con fecha futura.
  */
-export function getRecentCyclesMensual(count = 6): CycleInfo[] {
+export function getRecentCyclesMensual(count = 7): CycleInfo[] {
   const cycles: CycleInfo[] = [];
   const current = getCurrentCycleMensual();
   let cm = current.month - 1; // 0-indexed
   let cy = current.year;
 
-  for (let i = 0; i < count; i++) {
-    cycles.push(formatMensualCycle(cy, cm));
+  // Siguiente ciclo (futuro)
+  let nextCm = cm + 1;
+  let nextCy = cy;
+  if (nextCm > 11) { nextCm = 0; nextCy++; }
+  cycles.push(formatMensualCycle(nextCy, nextCm));
+
+  // Ciclo actual
+  cycles.push(formatMensualCycle(cy, cm));
+
+  // Ciclos anteriores
+  for (let i = 0; i < count - 2; i++) {
     if (cm === 0) { cm = 11; cy--; }
     else { cm--; }
+    cycles.push(formatMensualCycle(cy, cm));
   }
   return cycles;
 }

@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
 import { getRecentCycles, type CycleInfo } from "@/lib/cycles";
-import { getVouchersByCycleActionFormatted, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
+import { getVouchersByCycleActionFormatted, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, moveVoucherToCycleAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -35,7 +35,8 @@ import {
   ImageOff,
   Signature,
   Upload,
-  AlertTriangle
+  AlertTriangle,
+  ArrowRightLeft
 } from "lucide-react";
 
 function AdminContent() {
@@ -55,6 +56,12 @@ function AdminContent() {
   const [signingVoucher, setSigningVoucher] = useState<FormattedVoucher | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploadingSignature, setIsUploadingSignature] = useState(false);
+
+  // Mover vale de ciclo
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [movingVoucher, setMovingVoucher] = useState<FormattedVoucher | null>(null);
+  const [movingTargetCycle, setMovingTargetCycle] = useState('');
+  const [movingInProgress, setMovingInProgress] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   const [filterSucursal, setFilterSucursal] = useState("TODAS");
@@ -241,8 +248,21 @@ function AdminContent() {
       
       const data = await response.json();
       if (data.zip_url) {
-        window.location.href = data.zip_url;
-        toast({ title: "Paquete listo", description: "Iniciando descarga del archivo ZIP." });
+        // Descargar como blob para poder nombrar el archivo
+        const primerNumVale = targets[0]?.raw.numVale || 'SN';
+        const sucursalNombre = selectedBatchSucursal !== "TODAS" ? selectedBatchSucursal.replace(/\s+/g, '_') : 'TODAS';
+        const filename = `vales_${type}_${primerNumVale}_${sucursalNombre}_${selectedCycle}.zip`;
+        const zipResponse = await fetch(data.zip_url);
+        const blob = await zipResponse.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast({ title: "Paquete listo", description: `Descargando ${filename}` });
       }
     } catch (e) {
       console.error(e);
@@ -561,6 +581,73 @@ function AdminContent() {
         </DialogContent>
       </Dialog>
 
+      {/* Diálogo para mover vale de ciclo */}
+      <Dialog open={showMoveDialog} onOpenChange={setShowMoveDialog}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowRightLeft className="w-5 h-5 text-orange-600" />
+              Mover vale de ciclo
+            </DialogTitle>
+            <DialogDescription>
+              {movingVoucher && (
+                <>Mover el vale <strong>#{movingVoucher.raw.numVale}</strong> de <strong>{movingVoucher.raw.entregado}</strong> ({movingVoucher.raw.sucursal}) a otro periodo.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-3">
+            <div className="bg-muted/50 rounded-lg p-3 text-xs space-y-1">
+              <p><strong>Ciclo actual:</strong> {selectedCycle}</p>
+              <p><strong>Vale:</strong> {movingVoucher?.raw.id}</p>
+              <p><strong>Fecha:</strong> {movingVoucher?.raw.fecha}</p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold uppercase text-muted-foreground">Mover a:</label>
+              <Select value={movingTargetCycle} onValueChange={setMovingTargetCycle}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="Seleccioná el ciclo destino" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cycles
+                    .filter(c => c.id !== selectedCycle)
+                    .map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.label}</SelectItem>
+                    ))
+                  }
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowMoveDialog(false)} disabled={movingInProgress}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!movingVoucher || !movingTargetCycle) return;
+                setMovingInProgress(true);
+                const result = await moveVoucherToCycleAction(movingVoucher.id, selectedCycle, movingTargetCycle);
+                setMovingInProgress(false);
+                if (result.success) {
+                  toast({ title: 'Vale movido', description: `Movido a "${movingTargetCycle}".` });
+                  setVales(prev => prev.filter(v => v.id !== movingVoucher.id));
+                  setShowMoveDialog(false);
+                  setMovingVoucher(null);
+                  setMovingTargetCycle('');
+                } else {
+                  toast({ variant: 'destructive', title: 'Error', description: result.error });
+                }
+              }}
+              disabled={!movingTargetCycle || movingInProgress}
+              className="bg-orange-600 hover:bg-orange-700"
+            >
+              {movingInProgress ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <ArrowRightLeft className="w-4 h-4 mr-1.5" />}
+              Mover vale
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Diálogo para seleccionar sucursal antes del ZIP */}
       <Dialog open={showSucursalDialog} onOpenChange={setShowSucursalDialog}>
         <DialogContent className="sm:max-w-[400px]">
@@ -825,6 +912,20 @@ function AdminContent() {
                               <ImageOff className="w-3.5 h-3.5" />
                             </Button>
                           )}
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-orange-600 hover:text-orange-800 hover:bg-orange-50"
+                            title="Mover vale a otro ciclo"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMovingVoucher(vale);
+                              setMovingTargetCycle('');
+                              setShowMoveDialog(true);
+                            }}
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5" />
+                          </Button>
                           <Button 
                             variant="ghost" 
                             size="icon" 

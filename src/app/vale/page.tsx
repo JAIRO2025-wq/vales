@@ -292,6 +292,30 @@ function ValeContent() {
     }
   };
 
+  /** Permite cambiar quién autoriza (CAJERA ↔ JEFE) */
+  const handleCambiarAutorizador = async () => {
+    setAutorizadorGuardado(false);
+    setTipoAutorizador(null);
+    setFirmaAutorizadorUrl(null);
+    setTokenJefe(null);
+    // Limpiar también en el servidor para que el polling no re-pueble datos viejos
+    setVoucherStatus(prev => prev ? { ...prev, tipoAutorizador: null, firmaAutorizadorUrl: null, autorizadoPorJefe: false, tokenJefe: null } : null);
+    try {
+      await saveVoucherAction({
+        ...voucherData,
+        firmado: false,
+        tipoAutorizador: undefined,
+        firmaAutorizadorUrl: undefined,
+        autorizadoPorJefe: undefined,
+        autorizadoPor: undefined,
+        tokenJefe: undefined,
+        timestamp: new Date().toISOString(),
+      } as any);
+    } catch (err) {
+      console.error("Error limpiando autorizador del servidor:", err);
+    }
+  };
+
   if (isChecking) {
     return (
       <div className="min-h-screen bg-zinc-50 flex flex-col items-center justify-center gap-4">
@@ -447,11 +471,11 @@ function ValeContent() {
                   <p className="text-[10px] text-muted-foreground">Envía este QR al jefe para que autorice</p>
                 </div>
               </div>
-              <div className="bg-white rounded border shadow-sm flex justify-center p-2">
+              <div className="bg-white rounded border shadow-sm flex justify-center p-2 aspect-square w-[160px]">
                 <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(`${baseUrl}/autorizar-vale?token=${encodeURIComponent(tokenJefe || '')}`)}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(`${baseUrl}/autorizar-vale?token=${encodeURIComponent(tokenJefe || '')}`)}`}
                   alt="QR Autorización Jefe"
-                  className="w-[120px] h-[120px]"
+                  className="w-full h-full object-contain"
                 />
               </div>
               <Button
@@ -476,8 +500,8 @@ function ValeContent() {
 
       {/* Bloqueo: si JEFE seleccionado pero no autorizado, bloquear firma/comprobante */}
       {autorizadorGuardado && tipoAutorizador === 'JEFE' && !voucherStatus?.autorizadoPorJefe && !voucherStatus?.firmado && (
-        <div className="fixed inset-0 z-30 pointer-events-none print:hidden">
-          <div className="absolute inset-0 bg-black/5" />
+        <div className="fixed inset-0 z-30 pointer-events-auto print:hidden">
+          <div className="absolute inset-0 bg-black/10 backdrop-blur-[2px]" />
           <div className="absolute top-4 left-1/2 -translate-x-1/2">
             <div className="bg-amber-50 border-2 border-amber-400 rounded-lg px-4 py-2 shadow-lg">
               <p className="text-xs font-bold text-amber-800 flex items-center gap-2">
@@ -510,7 +534,7 @@ function ValeContent() {
       <div className="flex flex-row min-h-screen print:block">
         
         {/* ===== PANEL IZQUIERDO (15%) - QRs y Acciones ===== */}
-        <div className="w-[15%] min-w-[180px] max-w-[240px] bg-white border-r border-zinc-200 p-3 flex flex-col gap-3 print:hidden overflow-y-auto sticky top-0 h-screen">
+        <div className="w-[25%] min-w-[220px] max-w-[320px] bg-white border-r border-zinc-200 p-3 flex flex-col gap-3 print:hidden overflow-y-auto sticky top-0 h-screen">
           
           {/* Encabezado pequeño */}
           <div className="text-center pb-2 border-b border-zinc-100">
@@ -529,10 +553,15 @@ function ValeContent() {
                   <CheckCircle2 className="w-6 h-6" />
                   <span className="font-black" style={{ fontSize: "8px" }}>REGISTRADA</span>
                 </div>
+              ) : (autorizadorGuardado && tipoAutorizador === 'JEFE' && !voucherStatus?.autorizadoPorJefe) ? (
+                <div className="flex flex-col items-center gap-1 text-amber-600 py-2">
+                  <ShieldCheck className="w-6 h-6" />
+                  <span className="font-black" style={{ fontSize: "7px" }}>ESPERANDO JEFE</span>
+                </div>
               ) : (
                 <>
-                                    <div className="bg-white rounded border shadow-sm w-full flex justify-center">
-                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(signUrl)}`} alt="QR Firma" className="w-[120px] h-[120px] max-w-full" />
+                  <div className="bg-white rounded border shadow-sm w-full aspect-square flex items-center justify-center">
+                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(signUrl)}`} alt="QR Firma" className="w-full h-full object-contain p-1" />
                   </div>
                   <p className="text-muted-foreground" style={{ fontSize: "6.5px", lineHeight: 1.2 }}>Copiar link o escanear QR</p>
                 </>
@@ -551,10 +580,15 @@ function ValeContent() {
                   <CheckCircle2 className="w-6 h-6" />
                   <span className="font-black" style={{ fontSize: "8px" }}>CARGADO</span>
                 </div>
+              ) : (autorizadorGuardado && tipoAutorizador === 'JEFE' && !voucherStatus?.autorizadoPorJefe) ? (
+                <div className="flex flex-col items-center gap-1 text-amber-600 py-2">
+                  <ShieldCheck className="w-6 h-6" />
+                  <span className="font-black" style={{ fontSize: "7px" }}>ESPERANDO JEFE</span>
+                </div>
               ) : (
                 <>
-                                    <div className="bg-white rounded border shadow-sm w-full flex justify-center">
-                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(attachUrl)}`} alt="QR Adjuntar" className="w-[120px] h-[120px] max-w-full" />
+                  <div className="bg-white rounded border shadow-sm w-full aspect-square flex items-center justify-center">
+                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(attachUrl)}`} alt="QR Adjuntar" className="w-full h-full object-contain p-1" />
                   </div>
                   <p className="text-muted-foreground" style={{ fontSize: "6.5px", lineHeight: 1.2 }}>Copiar link o escanear QR</p>
                 </>
@@ -564,6 +598,19 @@ function ValeContent() {
 
           {/* Separador */}
           <div className="border-t border-zinc-100 pt-2 mt-1"></div>
+
+          {/* Cambiar autorizador (solo si ya se seleccionó y no está firmado) */}
+          {autorizadorGuardado && !isSigned && (
+            <Button
+              onClick={handleCambiarAutorizador}
+              variant="outline"
+              className="w-full h-8 border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold shadow-sm"
+              style={{ fontSize: "8px" }}
+            >
+              <Users className="w-3 h-3 mr-1" />
+              Cambiar quien autoriza
+            </Button>
+          )}
 
           {/* Botones de acción compactos */}
           <Button 

@@ -123,6 +123,26 @@ export interface FormattedVoucher {
 const PYTHON_STORAGE_PREFIX = '/storage/';
 
 /**
+ * Busca en config.json PINES el nombre de la persona con el rol dado para una sucursal.
+ * Se usa como fallback cuando un voucher no tiene autorizadoPor guardado.
+ */
+async function getAutorizadoPorFromPines(sucursal: string, tipo: string): Promise<string | null> {
+  try {
+    const configPath = path.join(process.cwd(), 'src/data/config.json');
+    const content = await fs.readFile(configPath, 'utf-8');
+    const config: AppConfig = JSON.parse(content);
+    const sucursalUpper = sucursal.toUpperCase();
+    for (const [name, data] of Object.entries(config.PINES)) {
+      const branchUpper = (data.branch || '').toUpperCase();
+      if (data.role === tipo && branchUpper === sucursalUpper) {
+        return name;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
  * Normaliza el ID para asegurar comparaciones consistentes.
  */
 export async function normalizeId(id: string): Promise<string> {
@@ -360,7 +380,8 @@ export async function formatVoucherForApi(
       pdfUrl: auditUrl,
       fechaFirma: voucher.timestamp || null,
       firmante: voucher.entregado || null,
-      autorizadoPor: voucher.autorizadoPor || null,
+      autorizadoPor: voucher.autorizadoPor
+        || (voucher.tipoAutorizador ? await getAutorizadoPorFromPines(voucher.sucursal, voucher.tipoAutorizador) : null),
       motivoOmitido: voucher.motivoOmitido || null,
       concepto: voucher.concepto || null,
       archivado: !!voucher.hasPdf,
@@ -446,6 +467,82 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
     return { success: true };
   } catch (error) {
     console.error('Error al guardar en disco:', error);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+/**
+ * Mueve un vale de un ciclo a otro.
+ * Útil cuando un vale se registró en el periodo incorrecto.
+ */
+export async function moveVoucherToCycleAction(
+  voucherId: string,
+  sourceCycle: string,
+  targetCycle: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!voucherId || !sourceCycle || !targetCycle) {
+    return { success: false, error: 'Faltan parámetros' };
+  }
+  if (sourceCycle === targetCycle) {
+    return { success: false, error: 'El ciclo origen y destino son iguales' };
+  }
+
+  try {
+    const year = new Date().getFullYear().toString();
+    const sourcePath = path.join(STORAGE_PATH, year, sourceCycle, 'vouchers.json');
+    const targetPath = path.join(STORAGE_PATH, year, targetCycle, 'vouchers.json');
+
+    // Leer archivo origen
+    let sourceVouchers: VoucherRecord[];
+    try {
+      const content = await fs.readFile(sourcePath, 'utf-8');
+      sourceVouchers = JSON.parse(content);
+    } catch {
+      return { success: false, error: `No se encontró el ciclo origen "${sourceCycle}"` };
+    }
+
+    // Buscar el vale en origen
+    const idx = sourceVouchers.findIndex(v => v.id === voucherId);
+    if (idx === -1) {
+      return { success: false, error: `Vale "${voucherId}" no encontrado en el ciclo ${sourceCycle}` };
+    }
+
+    const voucher = sourceVouchers[idx];
+
+    // Remover del origen
+    sourceVouchers.splice(idx, 1);
+    await fs.writeFile(sourcePath, JSON.stringify(sourceVouchers, null, 2), 'utf-8');
+
+    // Asegurar que el directorio destino existe
+    const targetDir = path.join(STORAGE_PATH, year, targetCycle);
+    await fs.mkdir(targetDir, { recursive: true });
+
+    // Leer archivo destino (o crear vacío)
+    let targetVouchers: VoucherRecord[] = [];
+    try {
+      const content = await fs.readFile(targetPath, 'utf-8');
+      targetVouchers = JSON.parse(content);
+    } catch {
+      // No existe aún, se crea uno nuevo
+    }
+
+    // Verificar que no exista ya un vale con el mismo ID en destino
+    if (targetVouchers.some(v => v.id === voucherId)) {
+      // Revertir: volver a insertar en origen
+      sourceVouchers.splice(idx, 0, voucher);
+      sourceVouchers.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+      await fs.writeFile(sourcePath, JSON.stringify(sourceVouchers, null, 2), 'utf-8');
+      return { success: false, error: `Ya existe un vale con ID "${voucherId}" en el ciclo destino` };
+    }
+
+    // Insertar en destino
+    targetVouchers.push(voucher);
+    targetVouchers.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+    await fs.writeFile(targetPath, JSON.stringify(targetVouchers, null, 2), 'utf-8');
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error moviendo vale:', error);
     return { success: false, error: (error as Error).message };
   }
 }

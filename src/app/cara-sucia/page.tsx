@@ -43,12 +43,36 @@ function getCicloMensualActual(): CycleInfo {
   };
 }
 
-function getUltimosCiclosMensuales(count = 6): CycleInfo[] {
+function getUltimosCiclosMensuales(count = 7): CycleInfo[] {
   const ciclos: CycleInfo[] = [];
   const actual = getCicloMensualActual();
   let m = actual.month - 1;
   let y = actual.year;
-  for (let i = 0; i < count; i++) {
+
+  // Siguiente ciclo (futuro) — para vales con fecha futura
+  let nextM = m + 1;
+  let nextY = y;
+  if (nextM > 11) { nextM = 0; nextY++; }
+  const nextLastDay = new Date(nextY, nextM + 1, 0).getDate();
+  ciclos.push({
+    id: `${nextY}-${(nextM+1).toString().padStart(2,'0')}`,
+    label: `${MONTHS[nextM]} 1 - ${MONTHS[nextM]} ${nextLastDay} ${nextY}`,
+    year: nextY,
+    month: nextM + 1,
+  });
+
+  // Ciclo actual
+  const lastDayActual = new Date(y, m + 1, 0).getDate();
+  ciclos.push({
+    id: `${y}-${(m+1).toString().padStart(2,'0')}`,
+    label: `${MONTHS[m]} 1 - ${MONTHS[m]} ${lastDayActual} ${y}`,
+    year: y,
+    month: m + 1,
+  });
+
+  // Ciclos anteriores
+  for (let i = 0; i < count - 2; i++) {
+    if (m === 0) { m = 11; y--; } else { m--; }
     const lastDay = new Date(y, m + 1, 0).getDate();
     ciclos.push({
       id: `${y}-${(m+1).toString().padStart(2,'0')}`,
@@ -56,7 +80,6 @@ function getUltimosCiclosMensuales(count = 6): CycleInfo[] {
       year: y,
       month: m + 1,
     });
-    if (m === 0) { m = 11; y--; } else { m--; }
   }
   return ciclos;
 }
@@ -244,8 +267,19 @@ export default function CaraSuciaDashboard() {
       if (!response.ok) throw new Error("Error en el motor de PDF");
       const data = await response.json();
       if (data.zip_url) {
-        window.location.href = data.zip_url;
-        toast({ title: "Paquete listo", description: "Iniciando descarga del archivo ZIP." });
+        const primerNumVale = targets[0]?.raw.numVale || 'SN';
+        const filename = `vales_${type}_${primerNumVale}_CARA_SUCIA_${selectedCycle}.zip`;
+        const zipResponse = await fetch(data.zip_url);
+        const blob = await zipResponse.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast({ title: "Paquete listo", description: `Descargando ${filename}` });
       }
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: "No se pudo generar el paquete ZIP masivo." });

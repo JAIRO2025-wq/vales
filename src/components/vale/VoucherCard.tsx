@@ -14,6 +14,18 @@ function resolveUrl(url: string | null | undefined): string | undefined {
   return url;
 }
 
+/** Busca en CONFIG.PINES el nombre de la persona con el rol dado para una sucursal */
+function getNombreFromPines(sucursal: string, role: string): string | null {
+  const sucursalUpper = sucursal.toUpperCase();
+  for (const [name, data] of Object.entries(CONFIG.PINES)) {
+    const branchUpper = (data.branch || '').toUpperCase();
+    if (data.role === role && branchUpper === sucursalUpper) {
+      return name;
+    }
+  }
+  return null;
+}
+
 interface VoucherCardProps {
   id: string;
   fecha: string;
@@ -288,7 +300,7 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
         }
 
         .sig-box .hand {
-          height: 70px;
+          height: 115px;
           display: flex;
           align-items: flex-end;
           justify-content: center;
@@ -466,7 +478,7 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
               <div className="hand" style={{ alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "4px" }}>
                 {firmaAutorizadorUrl ? (
                   <>
-                    <img src={resolveUrl(firmaAutorizadorUrl)} alt="Firma Autorizador" style={{ maxHeight: "80px", maxWidth: "280px", mixBlendMode: "multiply" }} />
+                    <img src={resolveUrl(firmaAutorizadorUrl)} alt="Firma Autorizador" style={{ maxHeight: "75px", maxWidth: "280px", mixBlendMode: "multiply" }} />
                     <span style={{ fontSize: "10px", fontWeight: 700, color: tipoAutorizador === 'JEFE' ? '#7c3aed' : '#059669' }}>
                       {tipoAutorizador === 'JEFE' ? 'Jefe de Agencia' : 'Cajera'}
                     </span>
@@ -494,7 +506,9 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
               <div className="line"></div>
               <div className="label">{tipoAutorizador === 'JEFE' ? 'Autoriza (Jefe de Agencia)' : 'Autoriza (Caja)'}</div>
               <div className="name" title={autorizadoPor || sucursal}>
-                {autorizadoPor || (tipoAutorizador === 'CAJERA' ? 'Cajera - ' + sucursal : 'Jefe - ' + sucursal)}
+                {autorizadoPor
+                  || (tipoAutorizador ? getNombreFromPines(sucursal, tipoAutorizador) : null)
+                  || (tipoAutorizador === 'CAJERA' ? 'Cajera - ' + sucursal : 'Jefe - ' + sucursal)}
               </div>
             </div>
           </div>

@@ -3,6 +3,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getLunesActual } from '@/lib/week-utils';
+import { type AppConfig } from '@/lib/config';
 
 const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
 
@@ -14,6 +15,38 @@ export interface FirmaAutorizada {
   /** Lunes de la semana en formato YYYY-MM-DD */
   semanaLunes: string;
   fechaRegistro: string;
+}
+
+/**
+ * Lee config.json y busca el nombre de la persona con el rol dado para una sucursal.
+ * Útil para enriquecer firmas que se guardaron sin el campo nombre.
+ */
+async function getNombreFromPines(sucursal: string, role: 'CAJERA' | 'JEFE'): Promise<string | null> {
+  try {
+    const configPath = path.join(process.cwd(), 'src/data/config.json');
+    const content = await fs.readFile(configPath, 'utf-8');
+    const config: AppConfig = JSON.parse(content);
+    const sucursalUpper = sucursal.toUpperCase();
+    for (const [name, data] of Object.entries(config.PINES)) {
+      const branchUpper = (data.branch || '').toUpperCase();
+      if (data.role === role && branchUpper === sucursalUpper) {
+        return name;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** Enriquece una firma con el nombre desde PINES si no lo tiene */
+async function enrichFirmaNombre(firma: FirmaAutorizada): Promise<FirmaAutorizada> {
+  if (firma.nombre && firma.nombre.trim() && firma.nombre !== 'Cajera' && firma.nombre !== 'Jefe') {
+    return firma;
+  }
+  const nombrePin = await getNombreFromPines(firma.sucursal, firma.tipo);
+  if (nombrePin) {
+    return { ...firma, nombre: nombrePin };
+  }
+  return firma;
 }
 
 /**
@@ -92,14 +125,12 @@ export async function getFirmasAutorizadasAction(
     
     const sucursalUpper = sucursal.trim().toUpperCase();
     // Si no se especifica semana, devolver las de la semana actual
-    if (!semanaLunes) {
-      return firmas.filter(
-        f => f.sucursal.toUpperCase() === sucursalUpper && f.semanaLunes === lunes
-      );
-    }
-    return firmas.filter(
+    const filtered = firmas.filter(
       f => f.sucursal.toUpperCase() === sucursalUpper && f.semanaLunes === lunes
     );
+    // Enriquece cada firma con el nombre desde PINES si hace falta
+    const enriched = await Promise.all(filtered.map(enrichFirmaNombre));
+    return enriched;
   } catch {
     return [];
   }
