@@ -58,18 +58,30 @@ export function getCurrentCycle(): CycleInfo {
 }
 
 /**
- * Genera una lista de los últimos 6 ciclos para el selector
+ * Genera una lista de ciclos para el selector: actual + 5 anteriores + 1 siguiente.
+ * Incluye el siguiente ciclo porque pueden existir vales con fecha futura (ej: vale del 21
+ * cuando hoy es 19 — cae en el próximo ciclo Flynet).
  */
 export function getRecentCycles(): CycleInfo[] {
   const cycles: CycleInfo[] = [];
   const current = getCurrentCycle();
-  let cycleMonth = current.month - 1;
+  let cycleMonth = current.month - 1; // 0-indexed para formatFlynetCycle
   let cycleYear = current.year;
 
-  for (let i = 0; i < 6; i++) {
-    cycles.push(formatFlynetCycle(cycleYear, cycleMonth));
+  // Siguiente ciclo (futuro): el mes siguiente al actual
+  let nextMonth = cycleMonth + 1;
+  let nextYear = cycleYear;
+  if (nextMonth > 11) { nextMonth = 0; nextYear++; }
+  cycles.push(formatFlynetCycle(nextYear, nextMonth));
+
+  // Ciclo actual
+  cycles.push(formatFlynetCycle(cycleYear, cycleMonth));
+
+  // 5 ciclos anteriores
+  for (let i = 0; i < 5; i++) {
     if (cycleMonth === 0) { cycleMonth = 11; cycleYear--; }
     else { cycleMonth--; }
+    cycles.push(formatFlynetCycle(cycleYear, cycleMonth));
   }
   return cycles;
 }

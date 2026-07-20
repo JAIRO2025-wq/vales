@@ -31,6 +31,7 @@ function FirmaContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [isVerifyingPin, setIsVerifyingPin] = useState(false);
   const [alreadySigned, setAlreadySigned] = useState(false);
+  const [jefeBloqueado, setJefeBloqueado] = useState(false);
   const [pin, setPin] = useState("");
   const [isPinCorrect, setIsPinCorrect] = useState(false);
   const [authorizedUser, setAuthorizedUser] = useState<{name: string, role: string} | null>(null);
@@ -59,6 +60,10 @@ function FirmaContent() {
       const status = await checkVoucherStatusAction(voucherData.id, voucherData.fecha);
       if (status && (status.firmado || !!status.motivoOmitido)) {
         setAlreadySigned(true);
+      }
+      // Bloquear si el vale requiere autorización del jefe y aún no se ha dado
+      if (status && status.tipoAutorizador === 'JEFE' && !status.autorizadoPorJefe) {
+        setJefeBloqueado(true);
       }
       setIsLoading(false);
     };
@@ -242,6 +247,26 @@ function FirmaContent() {
 
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center font-headline text-primary">Verificando estado...</div>;
+  }
+
+  if (jefeBloqueado) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="w-full max-w-md text-center py-10 shadow-2xl border-amber-300">
+          <CardContent className="space-y-6">
+            <ShieldAlert className="w-16 h-16 text-amber-500 mx-auto" />
+            <h2 className="text-2xl font-bold font-headline text-amber-900">Autorización Pendiente</h2>
+            <p className="text-muted-foreground text-sm">
+              Este vale requiere la autorización del <strong>Jefe de Agencia</strong> antes de poder ser firmado.
+            </p>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[11px] text-amber-800">
+              El jefe debe escanear el QR de autorización o usar el enlace enviado para aprobar este vale.
+            </div>
+            <Button className="w-full h-12" variant="outline" onClick={() => window.close()}>Cerrar</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   if (alreadySigned) {

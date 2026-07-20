@@ -1,6 +1,30 @@
 "use client";
 
 import React from "react";
+import { CONFIG } from "@/lib/config";
+
+/** Resuelve URL: si es relativa (/storage/...), antepone el servidor Python */
+function resolveUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('/api/')) return url;
+  if (url.startsWith('/')) {
+    const base = (CONFIG.PDF_API_URL || '').endsWith('/') ? CONFIG.PDF_API_URL.slice(0, -1) : CONFIG.PDF_API_URL;
+    return base ? `${base}${url}` : url;
+  }
+  return url;
+}
+
+/** Busca en CONFIG.PINES el nombre de la persona con el rol dado para una sucursal */
+function getNombreFromPines(sucursal: string, role: string): string | null {
+  const sucursalUpper = sucursal.toUpperCase();
+  for (const [name, data] of Object.entries(CONFIG.PINES)) {
+    const branchUpper = (data.branch || '').toUpperCase();
+    if (data.role === role && branchUpper === sucursalUpper) {
+      return name;
+    }
+  }
+  return null;
+}
 
 interface VoucherCardProps {
   id: string;
@@ -16,6 +40,9 @@ interface VoucherCardProps {
   comprobanteUrl?: string;
   motivoOmitido?: string;
   autorizadoPor?: string;
+  tipoAutorizador?: string | null;
+  firmaAutorizadorUrl?: string | null;
+  autorizadoPorJefe?: boolean;
 }
 
 export const VoucherCard: React.FC<VoucherCardProps> = ({
@@ -32,6 +59,9 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
   comprobanteUrl,
   motivoOmitido,
   autorizadoPor,
+  tipoAutorizador,
+  firmaAutorizadorUrl,
+  autorizadoPorJefe,
 }) => {
   const sheetUpper = (sheet || "").toUpperCase();
   // Corregido: Otros Gastos ya no se agrupa con Caja Chica
@@ -270,7 +300,7 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
         }
 
         .sig-box .hand {
-          height: 70px;
+          height: 115px;
           display: flex;
           align-items: flex-end;
           justify-content: center;
@@ -436,7 +466,7 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
           <div className="signatures-area">
             <div className="sig-box">
               <div className="hand">
-                {signatureUrl && <img src={signatureUrl} alt="Firma" style={{ maxHeight: "90px", maxWidth: "375px", mixBlendMode: "multiply" }} />}
+                {signatureUrl && <img src={resolveUrl(signatureUrl)} alt="Firma" style={{ maxHeight: "90px", maxWidth: "375px", mixBlendMode: "multiply" }} />}
                 {motivoOmitido && <div className="omission-msg">AUTORIZADO SIN FIRMA: {motivoOmitido}</div>}
               </div>
               <div className="line"></div>
@@ -445,12 +475,41 @@ export const VoucherCard: React.FC<VoucherCardProps> = ({
             </div>
 
             <div className="sig-box">
-              <div className="hand" style={{ alignItems: "center", color: "#1e3a8a", fontWeight: "bold", fontSize: "11px", textTransform: "uppercase" }}>
-                {autorizadoPor ? "Autorización Verificada" : "Pendiente de Autorización"}
+              <div className="hand" style={{ alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "4px" }}>
+                {firmaAutorizadorUrl ? (
+                  <>
+                    <img src={resolveUrl(firmaAutorizadorUrl)} alt="Firma Autorizador" style={{ maxHeight: "75px", maxWidth: "280px", mixBlendMode: "multiply" }} />
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: tipoAutorizador === 'JEFE' ? '#7c3aed' : '#059669' }}>
+                      {tipoAutorizador === 'JEFE' ? 'Jefe de Agencia' : 'Cajera'}
+                    </span>
+                  </>
+                ) : autorizadoPor ? (
+                  <span style={{ color: '#1e3a8a', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase' }}>
+                    Autorización Verificada
+                  </span>
+                ) : (
+                  <span style={{ color: '#dc2626', fontWeight: 700, fontSize: '10px', textTransform: 'uppercase' }}>
+                    Pendiente de Autorización
+                  </span>
+                )}
+                {tipoAutorizador === 'JEFE' && !autorizadoPorJefe && (
+                  <span style={{ color: '#dc2626', fontWeight: 700, fontSize: '9px', background: '#fef2f2', padding: '2px 8px', borderRadius: '4px' }}>
+                    ⚠ Jefe no ha autorizado aún
+                  </span>
+                )}
+                {tipoAutorizador === 'JEFE' && autorizadoPorJefe && (
+                  <span style={{ color: '#059669', fontWeight: 700, fontSize: '9px', background: '#ecfdf5', padding: '2px 8px', borderRadius: '4px' }}>
+                    ✓ Autorizado por Jefe
+                  </span>
+                )}
               </div>
               <div className="line"></div>
-              <div className="label">Autoriza (Caja / Gerencia)</div>
-              <div className="name" title={autorizadoPor || sucursal}>{autorizadoPor || sucursal}</div>
+              <div className="label">{tipoAutorizador === 'JEFE' ? 'Autoriza (Jefe de Agencia)' : 'Autoriza (Caja)'}</div>
+              <div className="name" title={autorizadoPor || sucursal}>
+                {autorizadoPor
+                  || (tipoAutorizador ? getNombreFromPines(sucursal, tipoAutorizador) : null)
+                  || (tipoAutorizador === 'CAJERA' ? 'Cajera - ' + sucursal : 'Jefe - ' + sucursal)}
+              </div>
             </div>
           </div>
 

@@ -23,7 +23,6 @@ export function PinGate({ children }: PinGateProps) {
 
   useEffect(() => {
     setMounted(true);
-    // Verificar si ya se autenticó en esta sesión del navegador
     const stored = sessionStorage.getItem(AUTH_KEY);
     if (stored === "true") {
       setIsAuthed(true);
@@ -60,59 +59,66 @@ export function PinGate({ children }: PinGateProps) {
     }
   };
 
-  if (!mounted) return null;
-
-  if (isAuthed) {
-    return <>{children}</>;
-  }
-
+  // En lugar de `return null`, renderizamos la estructura completa pero
+  // la mantenemos invisible hasta que el componente se monte para evitar parpadeos.
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 to-background p-4">
-      <Card className="w-full max-w-md shadow-2xl border-2">
-        <CardHeader className="text-center pb-2 pt-8">
-          <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
-            <Lock className="w-8 h-8 text-primary" />
-          </div>
-          <CardTitle className="font-headline text-2xl">Acceso al Sistema</CardTitle>
-          <CardDescription>
-            Ingrese su PIN de seguridad para acceder a la aplicación
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pb-8">
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-2">
-              <label htmlFor="app-pin-input" className="text-sm font-bold text-muted-foreground uppercase block text-center">
-                PIN DE ACCESO
-              </label>
-              <Input
-                id="app-pin-input"
-                name="app_pin"
-                type="password"
-                inputMode="numeric"
-                maxLength={4}
-                autoComplete="one-time-code"
-                placeholder="****"
-                className="text-center text-4xl h-20 font-bold tracking-widest border-2 focus:border-primary"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                autoFocus
-                disabled={isVerifying}
-              />
+    <div 
+      className={`relative min-h-screen transition-opacity duration-200 ${mounted ? 'opacity-100' : 'opacity-0 invisible'}`}
+    >
+      {/* Contenido principal de la aplicación */}
+      <div className={isAuthed ? '' : 'pointer-events-none select-none blur-sm'}>
+        {children}
+      </div>
+
+      {/* Overlay de login */}
+      <div className={`fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-primary/5 to-background p-4 ${isAuthed ? 'hidden' : ''}`}>
+        <Card className="w-full max-w-md shadow-2xl border-2">
+          <CardHeader className="text-center pb-2 pt-8">
+            <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+              <Lock className="w-8 h-8 text-primary" />
             </div>
-            <Button
-              type="submit"
-              className="w-full h-14 text-lg font-bold shadow-lg"
-              disabled={isVerifying || pin.length < 4}
-            >
-              {isVerifying ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <ShieldCheck className="w-5 h-5 mr-2" />}
-              Ingresar
-            </Button>
-          </form>
-          <p className="text-[9px] text-muted-foreground font-black uppercase tracking-[0.2em] text-center mt-6">
-            Flynet Digital Security v6.0
-          </p>
-        </CardContent>
-      </Card>
+            <CardTitle className="font-headline text-2xl">Acceso al Sistema</CardTitle>
+            <CardDescription>
+              Ingrese su PIN de seguridad para acceder a la aplicación
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pb-8">
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <label htmlFor="app-pin-input" className="text-sm font-bold text-muted-foreground uppercase block text-center">
+                  PIN DE ACCESO
+                </label>
+                <Input
+                  id="app-pin-input"
+                  name="app_pin"
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  autoComplete="one-time-code"
+                  placeholder="****"
+                  className="text-center text-4xl h-20 font-bold tracking-widest border-2 focus:border-primary"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  autoFocus
+                  disabled={isVerifying}
+                />
+              </div>
+              <Button
+                type="submit"
+                className="w-full h-14 text-lg font-bold shadow-lg"
+                disabled={isVerifying || pin.length < 4}
+              >
+                <Loader2 className={`w-5 h-5 animate-spin mr-2 ${isVerifying ? '' : 'hidden'}`} />
+                <ShieldCheck className={`w-5 h-5 mr-2 ${isVerifying ? 'hidden' : ''}`} />
+                Ingresar
+              </Button>
+            </form>
+            <p className="text-[9px] text-muted-foreground font-black uppercase tracking-[0.2em] text-center mt-6">
+              Flynet Digital Security v6.0
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { CONFIG } from "@/lib/config";
-import { getVouchersByCycleAction, formatVoucherForApi, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
+import { getVouchersByCycleActionFormatted, saveVoucherAction, deleteSignatureAction, deleteComprobanteAction, deleteVoucherAction, type FormattedVoucher } from "@/app/actions/vouchers";
 import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -43,12 +43,36 @@ function getCicloMensualActual(): CycleInfo {
   };
 }
 
-function getUltimosCiclosMensuales(count = 6): CycleInfo[] {
+function getUltimosCiclosMensuales(count = 7): CycleInfo[] {
   const ciclos: CycleInfo[] = [];
   const actual = getCicloMensualActual();
   let m = actual.month - 1;
   let y = actual.year;
-  for (let i = 0; i < count; i++) {
+
+  // Siguiente ciclo (futuro) — para vales con fecha futura
+  let nextM = m + 1;
+  let nextY = y;
+  if (nextM > 11) { nextM = 0; nextY++; }
+  const nextLastDay = new Date(nextY, nextM + 1, 0).getDate();
+  ciclos.push({
+    id: `${nextY}-${(nextM+1).toString().padStart(2,'0')}`,
+    label: `${MONTHS[nextM]} 1 - ${MONTHS[nextM]} ${nextLastDay} ${nextY}`,
+    year: nextY,
+    month: nextM + 1,
+  });
+
+  // Ciclo actual
+  const lastDayActual = new Date(y, m + 1, 0).getDate();
+  ciclos.push({
+    id: `${y}-${(m+1).toString().padStart(2,'0')}`,
+    label: `${MONTHS[m]} 1 - ${MONTHS[m]} ${lastDayActual} ${y}`,
+    year: y,
+    month: m + 1,
+  });
+
+  // Ciclos anteriores
+  for (let i = 0; i < count - 2; i++) {
+    if (m === 0) { m = 11; y--; } else { m--; }
     const lastDay = new Date(y, m + 1, 0).getDate();
     ciclos.push({
       id: `${y}-${(m+1).toString().padStart(2,'0')}`,
@@ -56,7 +80,6 @@ function getUltimosCiclosMensuales(count = 6): CycleInfo[] {
       year: y,
       month: m + 1,
     });
-    if (m === 0) { m = 11; y--; } else { m--; }
   }
   return ciclos;
 }
@@ -125,11 +148,9 @@ export default function CaraSuciaDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const rawData = await getVouchersByCycleAction(selectedCycle);
-      // Filtrar solo vales de CARA SUCIA
-      const filteredRaw = rawData.filter(v => (v.sucursal || '').toUpperCase() === BRANCH);
       const origin = typeof window !== 'undefined' ? window.location.origin : "";
-      const formatted = await Promise.all(filteredRaw.map(v => formatVoucherForApi(v, origin)));
+      // UNA SOLA llamada al servidor: obtiene, filtra y formatea todos los vales de CARA SUCIA
+      const formatted = await getVouchersByCycleActionFormatted(selectedCycle, origin, BRANCH);
       setVales(formatted);
     } catch (err) {
       console.error("Error cargando vales:", err);
@@ -246,8 +267,19 @@ export default function CaraSuciaDashboard() {
       if (!response.ok) throw new Error("Error en el motor de PDF");
       const data = await response.json();
       if (data.zip_url) {
-        window.location.href = data.zip_url;
-        toast({ title: "Paquete listo", description: "Iniciando descarga del archivo ZIP." });
+        const primerNumVale = targets[0]?.raw.numVale || 'SN';
+        const filename = `vales_${type}_${primerNumVale}_CARA_SUCIA_${selectedCycle}.zip`;
+        const zipResponse = await fetch(data.zip_url);
+        const blob = await zipResponse.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast({ title: "Paquete listo", description: `Descargando ${filename}` });
       }
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: "No se pudo generar el paquete ZIP masivo." });
@@ -615,7 +647,29 @@ export default function CaraSuciaDashboard() {
                                 e.stopPropagation();
                                 if (!confirm('¿Eliminar la firma de este vale?')) return;
                                 const result = await deleteSignatureAction(vale.id, vale.raw.fecha);
-                                if (result.success) { toast({ title: 'Firma eliminada' }); loadData(); }
+                                if (result.success) {
+                                  toast({ title: 'Firma eliminada' });
+                                  setVales(prev => prev.map(v =>
+                                    v.id === vale.id ? {
+                                      ...v,
+                                      firmado: false,
+                                      fechaFirma: new Date().toISOString(),
+                                      firmante: null,
+                                      autorizadoPor: null,
+                                      motivoOmitido: null,
+                                      raw: {
+                                        ...v.raw,
+                                        firmado: false,
+                                        firmaUrl: undefined,
+                                        firmaUrlRaw: undefined,
+                                        firmaMeta: undefined,
+                                        autorizadoPor: undefined,
+                                        motivoOmitido: undefined,
+                                        timestamp: new Date().toISOString(),
+                                      }
+                                    } : v
+                                  ));
+                                }
                                 else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
                               }}>
                               <Eraser className="w-3.5 h-3.5" />
@@ -627,7 +681,20 @@ export default function CaraSuciaDashboard() {
                                 e.stopPropagation();
                                 if (!confirm('¿Eliminar el comprobante/ticket de este vale?')) return;
                                 const result = await deleteComprobanteAction(vale.id, vale.raw.fecha);
-                                if (result.success) { toast({ title: 'Comprobante eliminado' }); loadData(); }
+                                if (result.success) {
+                                  toast({ title: 'Comprobante eliminado' });
+                                  setVales(prev => prev.map(v =>
+                                    v.id === vale.id ? {
+                                      ...v,
+                                      comprobante: false,
+                                      raw: {
+                                        ...v.raw,
+                                        comprobanteUrl: undefined,
+                                        comprobanteUrlRaw: undefined,
+                                      }
+                                    } : v
+                                  ));
+                                }
                                 else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
                               }}>
                               <ImageOff className="w-3.5 h-3.5" />
@@ -638,7 +705,10 @@ export default function CaraSuciaDashboard() {
                               e.stopPropagation();
                               if (!confirm('¿Eliminar este vale permanentemente?')) return;
                               const result = await deleteVoucherAction(vale.id, vale.raw.fecha);
-                              if (result.success) { toast({ title: 'Vale eliminado' }); loadData(); }
+                              if (result.success) {
+                                toast({ title: 'Vale eliminado' });
+                                setVales(prev => prev.filter(v => v.id !== vale.id));
+                              }
                               else { toast({ variant: 'destructive', title: 'Error', description: result.error }); }
                             }}>
                             <Trash2 className="w-3.5 h-3.5" />

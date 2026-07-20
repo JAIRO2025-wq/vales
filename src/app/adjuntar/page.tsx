@@ -16,7 +16,8 @@ import {
   FileImage,
   AlertCircle,
   Loader2,
-  FileCheck2
+  FileCheck2,
+  ShieldAlert,
 } from "lucide-react";
 
 function AdjuntarContent() {
@@ -26,6 +27,7 @@ function AdjuntarContent() {
   
   const [isLoading, setIsLoading] = useState(true);
   const [alreadyHasReceipt, setAlreadyHasReceipt] = useState(false);
+  const [jefeBloqueado, setJefeBloqueado] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -52,6 +54,10 @@ function AdjuntarContent() {
       const status = await checkVoucherStatusAction(voucherInfo.id, voucherInfo.fecha);
       if (status && status.comprobanteUrl) {
         setAlreadyHasReceipt(true);
+      }
+      // Bloquear si el vale requiere autorización del jefe y aún no se ha dado
+      if (status && status.tipoAutorizador === 'JEFE' && !status.autorizadoPorJefe) {
+        setJefeBloqueado(true);
       }
       setIsLoading(false);
     };
@@ -209,6 +215,26 @@ function AdjuntarContent() {
 
   if (isLoading) {
     return <div className="min-h-screen flex items-center justify-center font-headline text-emerald-600">Verificando...</div>;
+  }
+
+  if (jefeBloqueado) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="w-full max-w-md text-center py-10 shadow-2xl border-amber-300">
+          <CardContent className="space-y-6">
+            <ShieldAlert className="w-16 h-16 text-amber-500 mx-auto" />
+            <h2 className="text-2xl font-bold font-headline text-amber-900">Autorización Pendiente</h2>
+            <p className="text-muted-foreground text-sm">
+              Este vale requiere la autorización del <strong>Jefe de Agencia</strong> antes de poder adjuntar el comprobante.
+            </p>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[11px] text-amber-800">
+              El jefe debe escanear el QR de autorización o usar el enlace enviado para aprobar este vale.
+            </div>
+            <Button className="w-full h-12" variant="outline" onClick={() => window.close()}>Cerrar</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   if (alreadyHasReceipt) {
