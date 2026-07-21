@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs/promises';
-import path from 'path';
-import { type VoucherRecord, normalizeId, formatVoucherForApi } from '@/app/actions/vouchers';
+import { normalizeId, formatVoucherForApi, readAllVouchersInCycle } from '@/app/actions/vouchers';
 import { getCycleFromDate } from '@/lib/cycles';
-
-const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
 
 /**
  * API Maestra de Consulta de Estado
@@ -38,11 +34,9 @@ export async function GET(request: NextRequest) {
 
     // CASO A: Consulta masiva por ciclo (YYYY-MM)
     if (cicloParams) {
-      const [year, month] = cicloParams.split('-');
-      const filePath = path.join(STORAGE_PATH, year, `${year}-${month}`, 'vouchers.json');
+      const [year] = cicloParams.split('-');
       try {
-        const content = await fs.readFile(filePath, 'utf-8');
-        const vouchers: VoucherRecord[] = JSON.parse(content);
+        const vouchers = await readAllVouchersInCycle(year, cicloParams);
         // Para consultas masivas, NO resolvemos imágenes (solo datos crudos).
         // El que necesite imágenes que llame al endpoint individual con ?id=.
         // Esto evita saturar el servidor leyendo cientos de imágenes del disco.
@@ -97,16 +91,15 @@ export async function GET(request: NextRequest) {
 
       // Buscar en todos los ciclos candidatos
       for (const cid of cyclesToTry) {
-        const filePath = path.join(STORAGE_PATH, cid.split('-')[0], cid, 'vouchers.json');
+        const [cYear] = cid.split('-');
         try {
-          const content = await fs.readFile(filePath, 'utf-8');
-          const vouchers: VoucherRecord[] = JSON.parse(content);
+          const vouchers = await readAllVouchersInCycle(cYear, cid);
           const voucher = vouchers.find(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
           if (voucher) {
             return NextResponse.json(await formatVoucherForApi(voucher, origin));
           }
         } catch {
-          // Archivo no existe en este ciclo, probar el siguiente
+          // Ciclo no existe, probar el siguiente
           continue;
         }
       }

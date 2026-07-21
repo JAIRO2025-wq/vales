@@ -77,7 +77,7 @@ async function scanForVouchers(dir: string, result: VoucherRecord[]) {
 }
 
 /** Lee TODOS los vouchers de un ciclo, con retrocompatibilidad para la estructura plana antigua */
-async function readAllVouchersInCycle(year: string | number, cycleId: string): Promise<VoucherRecord[]> {
+export async function readAllVouchersInCycle(year: string | number, cycleId: string): Promise<VoucherRecord[]> {
   const cycleDir = path.join(STORAGE_PATH, String(year), cycleId);
   const allVouchers: VoucherRecord[] = [];
 
@@ -124,7 +124,7 @@ async function collectExistingJsonPaths(cycleDir: string): Promise<string[]> {
 
 /** Escribe los vouchers en la estructura jerárquica, agrupando por sucursal/caja.
  *  También limpia los vouchers.json de grupos que quedaron vacíos (por movimientos/eliminaciones). */
-async function writeAllVouchersToCycle(year: string | number, cycleId: string, vouchers: VoucherRecord[]) {
+export async function writeAllVouchersToCycle(year: string | number, cycleId: string, vouchers: VoucherRecord[]) {
   const groups: Map<string, VoucherRecord[]> = new Map();
   for (const v of vouchers) {
     const sucursal = (v.sucursal || 'SIN-SUCURSAL').toUpperCase().replace(/\s+/g, '-');
