@@ -59,14 +59,14 @@ export function getRecentCyclesMensual(count = 7): CycleInfo[] {
   let cm = current.month - 1; // 0-indexed
   let cy = current.year;
 
+  // Ciclo actual (va primero = seleccionado por defecto)
+  cycles.push(formatMensualCycle(cy, cm));
+
   // Siguiente ciclo (futuro)
   let nextCm = cm + 1;
   let nextCy = cy;
   if (nextCm > 11) { nextCm = 0; nextCy++; }
   cycles.push(formatMensualCycle(nextCy, nextCm));
-
-  // Ciclo actual
-  cycles.push(formatMensualCycle(cy, cm));
 
   // Ciclos anteriores
   for (let i = 0; i < count - 2; i++) {

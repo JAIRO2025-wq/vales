@@ -10,6 +10,7 @@ import {
   Receipt,
   ExternalLink,
   ChevronRight,
+  ShieldCheck,
 } from "lucide-react";
 import { 
   Sidebar, 
@@ -87,6 +88,14 @@ export function CaraSuciaSidebar({ config }: CaraSuciaSidebarProps) {
                 <Link href="/cara-sucia/vouchers">
                   <Receipt />
                   <span>Vouchers Bancarios</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname.startsWith("/cara-sucia/firmas")} tooltip="Firmas Autorizadas">
+                <Link href="/cara-sucia/firmas">
+                  <ShieldCheck />
+                  <span>Firmas Autorizadas</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

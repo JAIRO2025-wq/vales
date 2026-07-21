@@ -42,9 +42,12 @@ export default function CentroDescargasPage() {
   const [filterCaja, setFilterCaja] = useState("TODAS");
   const [expandedSucursales, setExpandedSucursales] = useState<Set<string>>(new Set());
 
-  const [generandoPDFs, setGenerandoPDFs] = useState(false);
+  // En vez de un booleano global, trackeamos qué grupo específico se está generando.
+  // Así solo ese botón muestra spinner y no parece que todas las cajas se descargan.
+  const [generandoGrupo, setGenerandoGrupo] = useState<string | null>(null);
   const [pdfsGenerados, setPdfsGenerados] = useState(0);
   const [pdfsTotal, setPdfsTotal] = useState(0);
+  const generandoPDFs = generandoGrupo !== null;
 
   // Determinar si estamos viendo una sucursal con ciclo mensual (CARA SUCIA)
   const esCicloMensual = filterSucursal === "CARA SUCIA";
@@ -246,7 +249,7 @@ export default function CentroDescargasPage() {
       return;
     }
 
-    setGenerandoPDFs(true);
+    setGenerandoGrupo(label);
     setPdfsGenerados(0);
     setPdfsTotal(valesGrupo.length);
 
@@ -290,7 +293,7 @@ export default function CentroDescargasPage() {
       console.error(e);
       toast({ variant: "destructive", title: "Error", description: "No se pudo generar el paquete de PDFs." });
     } finally {
-      setGenerandoPDFs(false);
+      setGenerandoGrupo(null);
     }
   };
 
@@ -489,7 +492,7 @@ export default function CentroDescargasPage() {
                     handleDescargarGrupo(todos, `${suc} (TODAS)`);
                   }}
                 >
-                  {generandoPDFs ? (
+                  {generandoGrupo === `${suc} (TODAS)` ? (
                     <Loader2 className="w-3 h-3 animate-spin mr-1" />
                   ) : (
                     <Download className="w-3 h-3 mr-1" />
@@ -533,7 +536,7 @@ export default function CentroDescargasPage() {
                           disabled={generandoPDFs}
                           onClick={() => handleDescargarGrupo(valesCaja, `${suc} · ${caja}`)}
                         >
-                          {generandoPDFs ? (
+                          {generandoGrupo === `${suc} · ${caja}` ? (
                             <Loader2 className="w-3 h-3 animate-spin mr-1" />
                           ) : (
                             <Download className="w-3 h-3 mr-1" />

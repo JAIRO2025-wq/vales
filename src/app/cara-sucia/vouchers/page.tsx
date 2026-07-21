@@ -24,18 +24,7 @@ function getUltimosCiclosMensuales(count = 7): CycleInfo[] {
   const { year, month } = getLocalDateSV();
   const ciclos: CycleInfo[] = [];
 
-  // Siguiente ciclo (futuro) — para vales con fecha futura
-  let nextM = month + 1;
-  let nextY = year;
-  if (nextM > 11) { nextM = 0; nextY++; }
-  const nextLastDay = new Date(nextY, nextM + 1, 0).getDate();
-  ciclos.push({
-    id: `${nextY}-${(nextM+1).toString().padStart(2,'0')}`,
-    label: `${MONTHS[nextM]} 1 - ${MONTHS[nextM]} ${nextLastDay} ${nextY}`,
-    year: nextY,
-    month: nextM + 1,
-  });
-
+  // Ciclo actual (va primero = seleccionado por defecto)
   let m = month, y = year;
   for (let i = 0; i < count - 1; i++) {
     const lastDay = new Date(y, m + 1, 0).getDate();
@@ -47,6 +36,19 @@ function getUltimosCiclosMensuales(count = 7): CycleInfo[] {
     });
     if (m === 0) { m = 11; y--; } else { m--; }
   }
+
+  // Siguiente ciclo (futuro) — para vales con fecha futura, al final
+  let nextM = month + 1;
+  let nextY = year;
+  if (nextM > 11) { nextM = 0; nextY++; }
+  const nextLastDay = new Date(nextY, nextM + 1, 0).getDate();
+  ciclos.push({
+    id: `${nextY}-${(nextM+1).toString().padStart(2,'0')}`,
+    label: `${MONTHS[nextM]} 1 - ${MONTHS[nextM]} ${nextLastDay} ${nextY}`,
+    year: nextY,
+    month: nextM + 1,
+  });
+
   return ciclos;
 }
 // ===== FIN CICLO MENSUAL =====

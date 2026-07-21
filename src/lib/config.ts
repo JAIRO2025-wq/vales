@@ -22,6 +22,7 @@ export interface AppConfig {
   SUCURSALES: string[];
   TIPOS_CAJA: string[];
   CICLOS?: Record<string, CicloConfig>;
+  SUPER_ADMIN_PASSWORD?: string;
 }
 
 /**

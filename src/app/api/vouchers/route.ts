@@ -13,7 +13,8 @@ interface VoucherEntry {
 interface VoucherListResponse {
   sucursal: string;
   year: string;
-  month: string;
+  ciclo: string;
+  caja: string;
   vouchers: VoucherEntry[];
 }
 
@@ -24,31 +25,25 @@ interface VoucherListResponse {
  * Parámetros opcionales:
  *   ?ciclo=2026-06        → filtra por ciclo (YYYY-MM)
  *   ?sucursal=SAN-MIGUEL  → filtra por sucursal
- *   ?year=2026&month=06   → filtra por año/mes específico
  * 
- * Sin parámetros, devuelve todos los vouchers de todas las sucursales.
+ * La estructura es: vouchers/{year}/{ciclo}/{sucursal}/{caja}/
  */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const filterSucursal = searchParams.get('sucursal')?.toUpperCase() || null;
+    const filterSucursal = searchParams.get('sucursal')?.toUpperCase().replace(/\s+/g, '-') || null;
     const filterCiclo = searchParams.get('ciclo') || null; // YYYY-MM
-    const filterYear = searchParams.get('year') || null;
-    const filterMonth = searchParams.get('month') || null;
 
-    // Si se pasa ?ciclo=, extraer año y mes
-    const effectiveYear = filterYear || (filterCiclo ? filterCiclo.split('-')[0] : null);
-    const effectiveMonth = filterMonth || (filterCiclo ? filterCiclo.split('-')[1] : null);
+    // Si se pasa ?ciclo=, extraer año
+    const filterYear = filterCiclo ? filterCiclo.split('-')[0] : null;
 
     console.log('[DEBUG /api/vouchers] Parámetros:', {
-      filterSucursal, filterCiclo, filterYear, filterMonth,
-      effectiveYear, effectiveMonth
+      filterSucursal, filterCiclo, filterYear
     });
 
     const vouchersDir = path.join(STORAGE_PATH, 'vouchers');
     const results: VoucherListResponse[] = [];
 
-    // Verificar que existe la carpeta vouchers
     try {
       await fs.access(vouchersDir);
     } catch {
@@ -57,66 +52,64 @@ export async function GET(request: NextRequest) {
     }
 
     // Recorrer años
-    const years = effectiveYear ? [effectiveYear] : await fs.readdir(vouchersDir);
+    const years = filterYear ? [filterYear] : await fs.readdir(vouchersDir);
     console.log('[DEBUG /api/vouchers] Años a recorrer:', years);
     
     for (const year of years) {
       const yearPath = path.join(vouchersDir, year);
       const yearStat = await fs.stat(yearPath).catch(() => null);
-      if (!yearStat?.isDirectory()) {
-        console.log(`[DEBUG /api/vouchers] ${yearPath} no es directorio, saltando`);
-        continue;
-      }
+      if (!yearStat?.isDirectory()) continue;
 
-      // Recorrer sucursales
-      const sucursalesRaw = await fs.readdir(yearPath).catch(() => []);
-      console.log(`[DEBUG /api/vouchers] Sucursales en ${year}:`, sucursalesRaw);
-      const sucursales = filterSucursal ? [filterSucursal] : sucursalesRaw;
-      
-      for (const sucursal of sucursales) {
-        const sucursalPath = path.join(yearPath, sucursal);
-        const sucStat = await fs.stat(sucursalPath).catch(() => null);
-        if (!sucStat?.isDirectory()) {
-          console.log(`[DEBUG /api/vouchers] ${sucursalPath} no es directorio, saltando`);
-          continue;
-        }
+      // Recorrer ciclos dentro del año
+      const ciclosRaw = await fs.readdir(yearPath).catch(() => []);
+      const ciclos = filterCiclo ? [filterCiclo] : ciclosRaw;
+      console.log(`[DEBUG /api/vouchers] Ciclos en ${year}:`, ciclosRaw);
 
-        // Recorrer meses
-        const monthsRaw = await fs.readdir(sucursalPath).catch(() => []);
-        console.log(`[DEBUG /api/vouchers] Meses en ${year}/${sucursal}:`, monthsRaw);
-        const months = effectiveMonth ? [effectiveMonth] : monthsRaw;
-        
-        for (const month of months) {
-          const monthPath = path.join(sucursalPath, month);
-          const monthStat = await fs.stat(monthPath).catch(() => null);
-          if (!monthStat?.isDirectory()) {
-            console.log(`[DEBUG /api/vouchers] ${monthPath} no es directorio, saltando`);
-            continue;
-          }
+      for (const ciclo of ciclos) {
+        const cicloPath = path.join(yearPath, ciclo);
+        const cicloStat = await fs.stat(cicloPath).catch(() => null);
+        if (!cicloStat?.isDirectory()) continue;
 
-          // Leer voucher-index.json
-          const indexPath = path.join(monthPath, 'voucher-index.json');
-          try {
-            const content = await fs.readFile(indexPath, 'utf-8');
-            const index: Record<string, { voucherUrl: string; subidoEl: string }> = JSON.parse(content);
-            const entries = Object.entries(index).map(([id, data]) => ({
-              id,
-              voucherUrl: data.voucherUrl,
-              subidoEl: data.subidoEl,
-            }));
+        // Recorrer sucursales
+        const sucursalesRaw = await fs.readdir(cicloPath).catch(() => []);
+        const sucursales = filterSucursal ? [filterSucursal] : sucursalesRaw;
 
-            console.log(`[DEBUG /api/vouchers] ${year}/${sucursal}/${month}: ${entries.length} vouchers`);
+        for (const sucursal of sucursales) {
+          const sucursalPath = path.join(cicloPath, sucursal);
+          const sucStat = await fs.stat(sucursalPath).catch(() => null);
+          if (!sucStat?.isDirectory()) continue;
 
-            if (entries.length > 0) {
-              results.push({
-                sucursal,
-                year,
-                month,
-                vouchers: entries,
-              });
+          // Recorrer cajas
+          const cajas = await fs.readdir(sucursalPath).catch(() => []);
+
+          for (const caja of cajas) {
+            const cajaPath = path.join(sucursalPath, caja);
+            const cajaStat = await fs.stat(cajaPath).catch(() => null);
+            if (!cajaStat?.isDirectory()) continue;
+
+            // Leer voucher-index.json
+            const indexPath = path.join(cajaPath, 'voucher-index.json');
+            try {
+              const content = await fs.readFile(indexPath, 'utf-8');
+              const index: Record<string, { voucherUrl: string; subidoEl: string }> = JSON.parse(content);
+              const entries = Object.entries(index).map(([id, data]) => ({
+                id,
+                voucherUrl: data.voucherUrl,
+                subidoEl: data.subidoEl,
+              }));
+
+              if (entries.length > 0) {
+                results.push({
+                  sucursal,
+                  year,
+                  ciclo,
+                  caja,
+                  vouchers: entries,
+                });
+              }
+            } catch (e) {
+              console.log(`[DEBUG /api/vouchers] No se pudo leer índice en ${year}/${ciclo}/${sucursal}/${caja}`);
             }
-          } catch (e) {
-            console.log(`[DEBUG /api/vouchers] No se pudo leer índice en ${year}/${sucursal}/${month}:`, (e as Error).message);
           }
         }
       }
@@ -131,13 +124,25 @@ export async function GET(request: NextRequest) {
 }
 
 /**
+ * Normaliza el sheet a nombre de carpeta de caja
+ */
+function normalizeCaja(sheet: string): string {
+  const s = (sheet || '').toUpperCase().trim();
+  if (s.includes('CHICA') || s === 'HOJA 1' || s.includes('GENERAL')) return 'CAJA-CHICA';
+  if (s.includes('CLIENTES')) return 'CLIENTES';
+  if (s.includes('INSTALACIONES')) return 'INSTALACIONES';
+  if (s.includes('OTROS')) return 'OTROS-GASTOS';
+  return s.replace(/\s+/g, '-');
+}
+
+/**
  * DELETE /api/vouchers
  * 
  * Borra un voucher (imagen + entrada del índice).
  * Body (JSON):
  *   { id: "SAN-MIGUEL-2026-01-W3-CLIENTES-F6" }
  * 
- * El endpoint extrae sucursal/año/mes del ID automáticamente.
+ * Extrae sucursal/año/mes del ID y calcula el ciclo Flynet.
  */
 export async function DELETE(request: NextRequest) {
   try {
@@ -148,20 +153,27 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Falta parámetro: id' }, { status: 400 });
     }
 
-    // Extraer componentes del ID
+    // Extraer componentes del ID: SUCURSAL-YYYY-MM-WX-CATEGORIA-FXX
     const normalized = rawId.trim().toUpperCase().replace(/[\s_]/g, '-');
-    const dateMatch = normalized.match(/^(.+)-(\d{4})-(\d{2})-/);
+    const idMatch = normalized.match(/^(.+)-(\d{4})-(\d{2})-W\d-(.+)-F\d+$/);
     
-    if (!dateMatch) {
+    if (!idMatch) {
       return NextResponse.json({ success: false, error: 'ID con formato inválido' }, { status: 400 });
     }
 
-    const sucursal = dateMatch[1];
-    const year = dateMatch[2];
-    const month = dateMatch[3];
+    const sucursal = idMatch[1];
+    const year = idMatch[2];
+    const month = idMatch[3];
+    const cajaFromId = idMatch[4];
+    const caja = normalizeCaja(cajaFromId);
 
-    const monthDir = path.join(STORAGE_PATH, 'vouchers', year, sucursal, month);
-    const indexPath = path.join(monthDir, 'voucher-index.json');
+    // Calcular ciclo Flynet
+    const { getCycleFromDate } = await import('@/lib/cycles');
+    const ciclo = getCycleFromDate(`${year}-${month}-25`);
+    const cicloId = ciclo.id;
+
+    const cajaDir = path.join(STORAGE_PATH, 'vouchers', year, cicloId, sucursal, caja);
+    const indexPath = path.join(cajaDir, 'voucher-index.json');
 
     // Leer índice actual
     let index: Record<string, { voucherUrl: string; subidoEl: string }> = {};
@@ -176,11 +188,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Voucher no encontrado' }, { status: 404 });
     }
 
-    // Borrar la imagen (buscar por nombre que empiece con el ID)
-    const files = await fs.readdir(monthDir);
+    // Borrar la imagen
+    const files = await fs.readdir(cajaDir);
     for (const file of files) {
       if (file.startsWith(normalized + '_voucher')) {
-        await fs.unlink(path.join(monthDir, file));
+        await fs.unlink(path.join(cajaDir, file));
       }
     }
 

@@ -68,14 +68,14 @@ export function getRecentCycles(): CycleInfo[] {
   let cycleMonth = current.month - 1; // 0-indexed para formatFlynetCycle
   let cycleYear = current.year;
 
+  // Ciclo actual (va primero = seleccionado por defecto)
+  cycles.push(formatFlynetCycle(cycleYear, cycleMonth));
+
   // Siguiente ciclo (futuro): el mes siguiente al actual
   let nextMonth = cycleMonth + 1;
   let nextYear = cycleYear;
   if (nextMonth > 11) { nextMonth = 0; nextYear++; }
   cycles.push(formatFlynetCycle(nextYear, nextMonth));
-
-  // Ciclo actual
-  cycles.push(formatFlynetCycle(cycleYear, cycleMonth));
 
   // 5 ciclos anteriores
   for (let i = 0; i < 5; i++) {

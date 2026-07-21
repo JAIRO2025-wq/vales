@@ -8,7 +8,7 @@ const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
  * POST /api/upload-voucher
  * 
  * Recibe una imagen de comprobante (voucher) y la guarda en:
- *   storage/vouchers/{año}/{sucursal}/{mes}/
+ *   storage/vouchers/{año}/{ciclo}/{sucursal}/{caja}/
  * 
  * Body (multipart/form-data):
  *   - id: string (ID del vale, ej: MORAZAN-2026-06-W5-CLIENTES-F63)
@@ -17,8 +17,18 @@ const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
  *   - imagen: File (archivo de imagen)
  * 
  * El ID contiene: SUCURSAL-YYYY-MM-WX-SHEET-FXX
- * La validación de duplicidad es por ID (fecha + sucursal + celda).
  */
+
+/** Normaliza el nombre de sheet a un nombre de carpeta limpio */
+function normalizeCaja(sheet: string): string {
+  const s = (sheet || '').toUpperCase().trim();
+  if (s.includes('CHICA') || s === 'HOJA 1' || s.includes('GENERAL')) return 'CAJA-CHICA';
+  if (s.includes('CLIENTES')) return 'CLIENTES';
+  if (s.includes('INSTALACIONES')) return 'INSTALACIONES';
+  if (s.includes('OTROS')) return 'OTROS-GASTOS';
+  return s.replace(/\s+/g, '-');
+}
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -55,29 +65,36 @@ export async function POST(request: NextRequest) {
     // Normalizar ID
     const targetId = id.trim().toUpperCase().replace(/[\s_]/g, '-').replace(/[^a-zA-Z0-9\-]/g, '');
 
-    // Extraer componentes del ID: SUCURSAL-YYYY-MM-WX-SHEET-FXX
-    // La sucursal puede contener guiones (ej: SAN-MIGUEL)
-    // Buscamos el patrón YYYY-MM para ubicar año y mes
-    const dateMatch = targetId.match(/^(.+)-(\d{4})-(\d{2})-/);
-    if (!dateMatch) {
+    // Extraer componentes del ID: SUCURSAL-YYYY-MM-WX-CATEGORIA-FXX
+    const idMatch = targetId.match(/^(.+)-(\d{4})-(\d{2})-W\d-(.+)-F\d+$/);
+    if (!idMatch) {
       return NextResponse.json(
         { success: false, error: 'ID con formato inválido. Debe ser: SUCURSAL-YYYY-MM-WX-SHEET-FXX' },
         { status: 400 }
       );
     }
 
-    const sucursal = dateMatch[1]; // todo antes del año
-    const year = dateMatch[2];
-    const month = dateMatch[3]; // MM
+    const sucursal = idMatch[1];    // ej: SAN-MIGUEL
+    const year = idMatch[2];        // ej: 2026
+    const month = idMatch[3];       // ej: 06
+    const cajaFromId = idMatch[4];  // ej: CAJACHICA
 
-    // ===== ESTRUCTURA DE CARPETAS: vouchers/{año}/{sucursal}/{mes}/ =====
-    const voucherDir = path.join(STORAGE_PATH, 'vouchers', year, sucursal, month);
+    // Normalizar caja usando el sheet si viene, o el extraído del ID
+    const caja = normalizeCaja(sheet || cajaFromId);
+
+    // Calcular ciclo Flynet: usar día 25 para asegurar que cae en el ciclo correcto
+    const { getCycleFromDate } = await import('@/lib/cycles');
+    const fecha25 = `${year}-${month}-25`;
+    const cycle = getCycleFromDate(fecha25);
+    const cicloId = cycle.id;       // ej: 2026-06
+
+    // ===== NUEVA ESTRUCTURA: vouchers/{año}/{ciclo}/{sucursal}/{caja}/ =====
+    const voucherDir = path.join(STORAGE_PATH, 'vouchers', year, cicloId, sucursal, caja);
     await fs.mkdir(voucherDir, { recursive: true });
 
     const indexPath = path.join(voucherDir, 'voucher-index.json');
 
-    // ===== VALIDACIÓN DE DUPLICIDAD =====
-    // Se revisa el índice de vouchers de esa sucursal/mes/año
+    // Validación de duplicidad
     let index: Record<string, { voucherUrl: string; subidoEl: string }> = {};
     try {
       const content = await fs.readFile(indexPath, 'utf-8');
@@ -120,11 +137,11 @@ export async function POST(request: NextRequest) {
       origin = 'https://vale.modulos.uk';
     }
 
-    // URL para servir la imagen: endpoint genérico con ruta relativa desde storage/
-    const relativePath = `vouchers/${year}/${sucursal}/${month}/${fileName}`;
-    const url = `${origin}/api/imagenes?fecha=${year}-${month}-15&file=${encodeURIComponent(relativePath)}`;
+    // URL para servir la imagen
+    const relativePath = `vouchers/${year}/${cicloId}/${sucursal}/${caja}/${fileName}`;
+    const url = `${origin}/api/imagenes?fecha=${year}-${month}-25&file=${encodeURIComponent(relativePath)}`;
 
-    // ===== REGISTRAR EN EL ÍNDICE =====
+    // Registrar en el índice
     const subidoEl = new Date().toISOString();
     index[targetId] = {
       voucherUrl: url,
@@ -132,9 +149,8 @@ export async function POST(request: NextRequest) {
     };
     await fs.writeFile(indexPath, JSON.stringify(index, null, 2), 'utf-8');
 
-    // También sincronizar con el vouchers.json del ciclo Flynet
-    // para que la API de estado (/api/estado) también lo detecte
-    await syncToCycleVouchers(targetId, year, month, url, fila, sheet);
+    // Sincronizar con los vales del ciclo para que checkVoucherStatusAction lo detecte
+    await syncToCycleVouchers(targetId, year, cicloId, url, fila, sheet);
 
     return NextResponse.json({
       success: true,
@@ -150,38 +166,23 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Sincroniza el voucher subido con el vouchers.json del ciclo Flynet
- * para que la API de estado (/api/estado) también lo vea.
- * 
- * IMPORTANTE: Usamos el día 25 del mes para calcular el ciclo Flynet.
- * El ciclo va del 20 de un mes al 19 del siguiente. El día 25 siempre
- * cae DENTRO del ciclo que corresponde al mes (ej: 2026-06-25 → ciclo 2026-06).
- * Con día 15, un voucher de junio caía en ciclo 2026-05 (erróneo).
+ * Sincroniza el voucher subido con la estructura jerárquica de vales
+ * ({year}/{ciclo}/{sucursal}/{caja}/vouchers.json)
+ * para que checkVoucherStatusAction también lo detecte.
  */
 async function syncToCycleVouchers(
   targetId: string,
   year: string,
-  month: string,
+  cicloId: string,
   voucherUrl: string,
   fila: string | null,
   sheet: string | null
 ) {
   try {
-    const { getCycleFromDate } = await import('@/lib/cycles');
-    // Usar día 25 para asegurar que cae dentro del ciclo del mes correcto
-    // (el ciclo va del 20 al 19 del siguiente mes)
-    const fecha = `${year}-${month}-25`;
-    const cycle = getCycleFromDate(fecha);
-    const cycleDir = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id);
-    const jsonPath = path.join(cycleDir, 'vouchers.json');
+    // Usar los helpers de vouchers.ts para lectura/escritura jerárquica
+    const { readAllVouchersInCycle, writeAllVouchersToCycle } = await import('@/app/actions/vouchers');
 
-    let vouchers: any[] = [];
-    try {
-      const content = await fs.readFile(jsonPath, 'utf-8');
-      vouchers = JSON.parse(content);
-    } catch {
-      await fs.mkdir(cycleDir, { recursive: true });
-    }
+    const vouchers = await readAllVouchersInCycle(year, cicloId);
 
     const idx = vouchers.findIndex(
       (v: any) => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId
@@ -195,15 +196,20 @@ async function syncToCycleVouchers(
         id: targetId,
         fila: fila || '',
         sheet: sheet || '',
-        fecha: fecha,
+        fecha: `${year}-01-01`, // fecha placeholder
         voucherUrl,
         voucherSubido: true,
         firmado: false,
         timestamp: new Date().toISOString(),
-      });
+        sucursal: '',
+        entregado: '',
+        rubro: '',
+        numVale: '',
+        monto: '0',
+      } as any);
     }
 
-    await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
+    await writeAllVouchersToCycle(year, cicloId, vouchers);
   } catch (e) {
     console.warn('No se pudo sincronizar con vouchers.json del ciclo:', e);
   }

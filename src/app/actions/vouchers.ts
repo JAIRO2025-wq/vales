@@ -35,6 +35,153 @@ function getCycleForBranch(fecha: string, branch?: string) {
   return getCycleFromDate(fecha);
 }
 
+// ── Helpers para la nueva estructura jerárquica: {year}/{ciclo}/{sucursal}/{caja}/vouchers.json ──
+
+/** Normaliza el nombre de sheet a un nombre de carpeta limpio */
+function normalizeCajaFolder(sheet: string): string {
+  const s = (sheet || '').toUpperCase().trim();
+  if (s.includes('CHICA') || s === 'HOJA 1' || s.includes('GENERAL')) return 'CAJA-CHICA';
+  if (s.includes('CLIENTES')) return 'CLIENTES';
+  if (s.includes('INSTALACIONES')) return 'INSTALACIONES';
+  if (s.includes('OTROS')) return 'OTROS-GASTOS';
+  return s.replace(/\s+/g, '-');
+}
+
+/** Devuelve la ruta del directorio donde se guarda un voucher según su sucursal, caja y ciclo */
+function getVoucherDir(voucher: { fecha: string; sucursal?: string; sheet?: string }): { dir: string; year: string; cycleId: string } {
+  const cycle = getCycleForBranch(voucher.fecha, voucher.sucursal);
+  const year = String(cycle.year);
+  const sucursal = (voucher.sucursal || 'SIN-SUCURSAL').toUpperCase().replace(/\s+/g, '-');
+  const caja = normalizeCajaFolder(voucher.sheet || 'GENERAL');
+  const dir = path.join(STORAGE_PATH, year, cycle.id, sucursal, caja);
+  return { dir, year, cycleId: cycle.id };
+}
+
+/** Escanea recursivamente un directorio de ciclo y recolecta todos los vouchers.json */
+async function scanForVouchers(dir: string, result: VoucherRecord[]) {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await scanForVouchers(fullPath, result);
+      } else if (entry.name === 'vouchers.json') {
+        try {
+          const content = await fs.readFile(fullPath, 'utf-8');
+          const vouchers = JSON.parse(content);
+          if (Array.isArray(vouchers)) result.push(...vouchers);
+        } catch { /* archivo corrupto o vacío, ignorar */ }
+      }
+    }
+  } catch { /* directorio no existe, ignorar */ }
+}
+
+/** Lee TODOS los vouchers de un ciclo, con retrocompatibilidad para la estructura plana antigua */
+async function readAllVouchersInCycle(year: string | number, cycleId: string): Promise<VoucherRecord[]> {
+  const cycleDir = path.join(STORAGE_PATH, String(year), cycleId);
+  const allVouchers: VoucherRecord[] = [];
+
+  // Leer de la nueva estructura jerárquica
+  await scanForVouchers(cycleDir, allVouchers);
+
+  // Retrocompatibilidad: si existe el archivo plano antiguo en la raíz del ciclo, también leerlo
+  try {
+    const oldFlatPath = path.join(cycleDir, 'vouchers.json');
+    const oldContent = await fs.readFile(oldFlatPath, 'utf-8');
+    const oldVouchers = JSON.parse(oldContent);
+    if (Array.isArray(oldVouchers)) {
+      for (const v of oldVouchers) {
+        // Evitar duplicados por ID
+        if (!allVouchers.some(existing => existing.id === v.id)) {
+          allVouchers.push(v);
+        }
+      }
+    }
+  } catch { /* no existe archivo plano antiguo */ }
+
+  return allVouchers;
+}
+
+/** Escanea recursivamente para recolectar todas las rutas de vouchers.json existentes */
+async function collectExistingJsonPaths(cycleDir: string): Promise<string[]> {
+  const paths: string[] = [];
+  async function walk(dir: string) {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(full);
+        } else if (entry.name === 'vouchers.json') {
+          paths.push(full);
+        }
+      }
+    } catch { /* no existe */ }
+  }
+  await walk(cycleDir);
+  return paths;
+}
+
+/** Escribe los vouchers en la estructura jerárquica, agrupando por sucursal/caja.
+ *  También limpia los vouchers.json de grupos que quedaron vacíos (por movimientos/eliminaciones). */
+async function writeAllVouchersToCycle(year: string | number, cycleId: string, vouchers: VoucherRecord[]) {
+  const groups: Map<string, VoucherRecord[]> = new Map();
+  for (const v of vouchers) {
+    const sucursal = (v.sucursal || 'SIN-SUCURSAL').toUpperCase().replace(/\s+/g, '-');
+    const caja = normalizeCajaFolder(v.sheet || 'GENERAL');
+    const key = `${sucursal}/${caja}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(v);
+  }
+
+  const yearStr = String(year);
+  const cycleDir = path.join(STORAGE_PATH, yearStr, cycleId);
+
+  // Recolectar todos los vouchers.json existentes ANTES de escribir
+  const existingPaths = await collectExistingJsonPaths(cycleDir);
+
+  // Escribir cada grupo en su archivo (crea nuevos y sobrescribe existentes)
+  const writtenPaths = new Set<string>();
+  for (const [key, groupVouchers] of groups) {
+    const dirPath = path.join(cycleDir, key);
+    await fs.mkdir(dirPath, { recursive: true });
+    const filePath = path.join(dirPath, 'vouchers.json');
+    await fs.writeFile(filePath, JSON.stringify(groupVouchers, null, 2), 'utf-8');
+    writtenPaths.add(filePath);
+  }
+
+  // Eliminar vouchers.json de grupos que quedaron VACÍOS (movidos/eliminados)
+  for (const oldPath of existingPaths) {
+    if (!writtenPaths.has(oldPath)) {
+      try {
+        await fs.unlink(oldPath);
+      } catch { /* ignorar */ }
+    }
+  }
+
+  // Limpiar carpetas vacías (opcional, para mantener el árbol limpio)
+  try {
+    const entries = await fs.readdir(cycleDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const subPath = path.join(cycleDir, entry.name);
+        try {
+          const subEntries = await fs.readdir(subPath);
+          if (subEntries.length === 0) {
+            await fs.rmdir(subPath);
+          }
+        } catch { /* ignorar */ }
+      }
+    }
+  } catch { /* ciclo no existe */ }
+
+  // Eliminar el archivo plano antiguo si existe (ya migramos a la nueva estructura)
+  try {
+    const oldFlatPath = path.join(cycleDir, 'vouchers.json');
+    await fs.unlink(oldFlatPath);
+  } catch { /* no existe */ }
+}
+
 const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
 
 export interface VoucherRecord {
@@ -411,12 +558,22 @@ export async function formatVoucherForApi(
  */
 export async function saveVoucherAction(voucher: VoucherRecord) {
   try {
+    // Validar año para prevenir corrupción de fechas (ej: 20226 en vez de 2026)
+    const fechaMatch = (voucher.fecha || '').match(/^(\d{4})-/);
+    if (!fechaMatch) {
+      console.warn(`[saveVoucherAction] Fecha inválida "${voucher.fecha}" para vale ${voucher.id}, se descarta.`);
+      return { success: false, error: "Fecha inválida" };
+    }
+    const yearFromDate = parseInt(fechaMatch[1], 10);
+    if (yearFromDate < 2000 || yearFromDate > 2100) {
+      console.warn(`[saveVoucherAction] Año fuera de rango (${yearFromDate}) en fecha "${voucher.fecha}" para vale ${voucher.id}, se descarta.`);
+      return { success: false, error: "Año fuera de rango" };
+    }
+
     const cycle = getCycleForBranch(voucher.fecha, voucher.sucursal);
-    const yearDir = path.join(STORAGE_PATH, cycle.year.toString());
-    const cycleDir = path.join(yearDir, cycle.id);
-    
-    await fs.mkdir(cycleDir, { recursive: true });
-    
+    const yearStr = cycle.year.toString();
+    const cycleId = cycle.id;
+
     const targetId = await normalizeId(voucher.id);
 
     // Normalizar sucursal a mayúsculas para evitar problemas de filtrado
@@ -427,13 +584,8 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
     const seEnvioFirma = voucher.firmaUrl !== undefined;
     const seEnvioComprobante = voucher.comprobanteUrl !== undefined;
 
-    const jsonPath = path.join(cycleDir, 'vouchers.json');
-    let vouchers: VoucherRecord[] = [];
-    
-    try {
-      const content = await fs.readFile(jsonPath, 'utf-8');
-      vouchers = JSON.parse(content);
-    } catch (e) {}
+    // Leer todos los vouchers del ciclo (nueva estructura jerárquica)
+    let vouchers: VoucherRecord[] = await readAllVouchersInCycle(yearStr, cycleId);
     
     const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
     
@@ -463,7 +615,8 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
       });
     }
     
-    await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
+    // Escribir en la nueva estructura jerárquica: {year}/{ciclo}/{sucursal}/{caja}/vouchers.json
+    await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     
     revalidatePath('/admin');
     return { success: true };
@@ -491,14 +644,14 @@ export async function moveVoucherToCycleAction(
 
   try {
     const year = new Date().getFullYear().toString();
-    const sourcePath = path.join(STORAGE_PATH, year, sourceCycle, 'vouchers.json');
-    const targetPath = path.join(STORAGE_PATH, year, targetCycle, 'vouchers.json');
 
-    // Leer archivo origen
+    // Leer vouchers del ciclo origen
     let sourceVouchers: VoucherRecord[];
     try {
-      const content = await fs.readFile(sourcePath, 'utf-8');
-      sourceVouchers = JSON.parse(content);
+      sourceVouchers = await readAllVouchersInCycle(year, sourceCycle);
+      if (sourceVouchers.length === 0) {
+        return { success: false, error: `No se encontró el ciclo origen "${sourceCycle}"` };
+      }
     } catch {
       return { success: false, error: `No se encontró el ciclo origen "${sourceCycle}"` };
     }
@@ -511,36 +664,22 @@ export async function moveVoucherToCycleAction(
 
     const voucher = sourceVouchers[idx];
 
-    // Remover del origen
-    sourceVouchers.splice(idx, 1);
-    await fs.writeFile(sourcePath, JSON.stringify(sourceVouchers, null, 2), 'utf-8');
-
-    // Asegurar que el directorio destino existe
-    const targetDir = path.join(STORAGE_PATH, year, targetCycle);
-    await fs.mkdir(targetDir, { recursive: true });
-
-    // Leer archivo destino (o crear vacío)
-    let targetVouchers: VoucherRecord[] = [];
-    try {
-      const content = await fs.readFile(targetPath, 'utf-8');
-      targetVouchers = JSON.parse(content);
-    } catch {
-      // No existe aún, se crea uno nuevo
-    }
+    // Leer vouchers del ciclo destino
+    let targetVouchers: VoucherRecord[] = await readAllVouchersInCycle(year, targetCycle);
 
     // Verificar que no exista ya un vale con el mismo ID en destino
     if (targetVouchers.some(v => v.id === voucherId)) {
-      // Revertir: volver a insertar en origen
-      sourceVouchers.splice(idx, 0, voucher);
-      sourceVouchers.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
-      await fs.writeFile(sourcePath, JSON.stringify(sourceVouchers, null, 2), 'utf-8');
       return { success: false, error: `Ya existe un vale con ID "${voucherId}" en el ciclo destino` };
     }
 
-    // Insertar en destino
+    // Remover del origen y escribir
+    sourceVouchers.splice(idx, 1);
+    await writeAllVouchersToCycle(year, sourceCycle, sourceVouchers);
+
+    // Insertar en destino y escribir
     targetVouchers.push(voucher);
     targetVouchers.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
-    await fs.writeFile(targetPath, JSON.stringify(targetVouchers, null, 2), 'utf-8');
+    await writeAllVouchersToCycle(year, targetCycle, targetVouchers);
 
     return { success: true };
   } catch (error) {
@@ -553,8 +692,9 @@ export async function savePdfAction(voucherId: string, fecha: string, numVale: s
   try {
     const branch = await extractBranchFromId(voucherId);
     const cycle = getCycleForBranch(fecha, branch);
-    const yearDir = path.join(STORAGE_PATH, cycle.year.toString());
-    const cycleDir = path.join(yearDir, cycle.id);
+    const yearStr = cycle.year.toString();
+    const cycleId = cycle.id;
+    const cycleDir = path.join(STORAGE_PATH, yearStr, cycleId);
     const pdfDir = path.join(cycleDir, 'pdfs');
     
     await fs.mkdir(pdfDir, { recursive: true });
@@ -579,17 +719,13 @@ export async function savePdfAction(voucherId: string, fecha: string, numVale: s
     
     await fs.writeFile(filePath, buffer);
 
-    const jsonPath = path.join(cycleDir, 'vouchers.json');
     const targetId = await normalizeId(voucherId);
-    try {
-      const content = await fs.readFile(jsonPath, 'utf-8');
-      const vouchers: VoucherRecord[] = JSON.parse(content);
-      const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
-      if (index >= 0) {
-        vouchers[index].hasPdf = true;
-        await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
-      }
-    } catch (e) {}
+    const vouchers: VoucherRecord[] = await readAllVouchersInCycle(yearStr, cycleId);
+    const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
+    if (index >= 0) {
+      vouchers[index].hasPdf = true;
+      await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
+    }
     
     revalidatePath('/admin');
     return { success: true };
@@ -602,9 +738,7 @@ export async function savePdfAction(voucherId: string, fecha: string, numVale: s
 export async function getVouchersByCycleAction(cycleId: string) {
   try {
     const year = cycleId.split('-')[0];
-    const filePath = path.join(STORAGE_PATH, year, cycleId, 'vouchers.json');
-    const content = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(content) as VoucherRecord[];
+    return await readAllVouchersInCycle(year, cycleId);
   } catch (e) {
     return [];
   }
@@ -630,9 +764,7 @@ export async function getVouchersByCycleActionFormatted(
 ): Promise<FormattedVoucher[]> {
   try {
     const year = cycleId.split('-')[0];
-    const filePath = path.join(STORAGE_PATH, year, cycleId, 'vouchers.json');
-    const content = await fs.readFile(filePath, 'utf-8');
-    const vouchers: VoucherRecord[] = JSON.parse(content);
+    const vouchers = await readAllVouchersInCycle(year, cycleId);
 
     // Cargar la config UNA SOLA VEZ para todo el lote
     const config = getServerConfig();
@@ -740,20 +872,20 @@ export async function deleteSignatureAction(id: string, fecha: string) {
   try {
     const branch = await extractBranchFromId(id);
     const cycle = getCycleForBranch(fecha, branch);
-    const jsonPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, 'vouchers.json');
+    const yearStr = cycle.year.toString();
+    const cycleId = cycle.id;
     const targetId = await normalizeId(id);
     
-    const content = await fs.readFile(jsonPath, 'utf-8');
-    const vouchers: VoucherRecord[] = JSON.parse(content);
+    const vouchers = await readAllVouchersInCycle(yearStr, cycleId);
     const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
     
     if (index < 0) return { success: false, error: 'Vale no encontrado' };
     
     const voucher = vouchers[index];
     
-    // Borrar archivo de firma si existe
+    // Borrar archivo de firma si existe (solo rutas legacy locales)
     if (voucher.firmaUrl && (voucher.firmaUrl.startsWith('imagenes/') || voucher.firmaUrl.startsWith('pdfs/'))) {
-      const fullPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, voucher.firmaUrl);
+      const fullPath = path.join(STORAGE_PATH, yearStr, cycleId, voucher.firmaUrl);
       try {
         await fs.unlink(fullPath);
       } catch (e) {
@@ -771,7 +903,7 @@ export async function deleteSignatureAction(id: string, fecha: string) {
       timestamp: new Date().toISOString(),
     };
     
-    await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
+    await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     revalidatePath('/admin');
     return { success: true };
   } catch (error) {
@@ -787,20 +919,20 @@ export async function deleteComprobanteAction(id: string, fecha: string) {
   try {
     const branch = await extractBranchFromId(id);
     const cycle = getCycleForBranch(fecha, branch);
-    const jsonPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, 'vouchers.json');
+    const yearStr = cycle.year.toString();
+    const cycleId = cycle.id;
     const targetId = await normalizeId(id);
     
-    const content = await fs.readFile(jsonPath, 'utf-8');
-    const vouchers: VoucherRecord[] = JSON.parse(content);
+    const vouchers = await readAllVouchersInCycle(yearStr, cycleId);
     const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
     
     if (index < 0) return { success: false, error: 'Vale no encontrado' };
     
     const voucher = vouchers[index];
     
-    // Borrar archivo de comprobante si existe
+    // Borrar archivo de comprobante si existe (solo rutas legacy locales)
     if (voucher.comprobanteUrl && (voucher.comprobanteUrl.startsWith('imagenes/') || voucher.comprobanteUrl.startsWith('pdfs/'))) {
-      const fullPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, voucher.comprobanteUrl);
+      const fullPath = path.join(STORAGE_PATH, yearStr, cycleId, voucher.comprobanteUrl);
       try {
         await fs.unlink(fullPath);
       } catch (e) {
@@ -815,7 +947,7 @@ export async function deleteComprobanteAction(id: string, fecha: string) {
       timestamp: new Date().toISOString(),
     };
     
-    await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
+    await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     revalidatePath('/admin');
     return { success: true };
   } catch (error) {
@@ -832,18 +964,18 @@ export async function deleteVoucherAction(id: string, fecha: string) {
   try {
     const branch = await extractBranchFromId(id);
     const cycle = getCycleForBranch(fecha, branch);
-    const jsonPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, 'vouchers.json');
+    const yearStr = cycle.year.toString();
+    const cycleId = cycle.id;
     const targetId = await normalizeId(id);
     
-    const content = await fs.readFile(jsonPath, 'utf-8');
-    const vouchers: VoucherRecord[] = JSON.parse(content);
+    const vouchers = await readAllVouchersInCycle(yearStr, cycleId);
     const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
     
     if (index < 0) return { success: false, error: 'Vale no encontrado' };
     
     const voucher = vouchers[index];
     
-    // Borrar archivos asociados
+    // Borrar archivos asociados (solo rutas legacy locales)
     const filesToDelete = [voucher.firmaUrl, voucher.comprobanteUrl];
     if (voucher.hasPdf) {
       const paddedNum = voucher.numVale.toString().padStart(3, '0');
@@ -852,7 +984,7 @@ export async function deleteVoucherAction(id: string, fecha: string) {
     
     for (const filePath of filesToDelete) {
       if (filePath && (filePath.startsWith('imagenes/') || filePath.startsWith('pdfs/'))) {
-        const fullPath = path.join(STORAGE_PATH, cycle.year.toString(), cycle.id, filePath);
+        const fullPath = path.join(STORAGE_PATH, yearStr, cycleId, filePath);
         try {
           await fs.unlink(fullPath);
         } catch (e) {
@@ -861,9 +993,9 @@ export async function deleteVoucherAction(id: string, fecha: string) {
       }
     }
     
-    // Eliminar el registro del JSON
+    // Eliminar el registro
     vouchers.splice(index, 1);
-    await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
+    await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     
     revalidatePath('/admin');
     return { success: true };
@@ -1000,11 +1132,9 @@ export async function authorizeVoucherByTokenAction(token: string) {
       
       for (const cycleDir of cycles) {
         if (!cycleDir.isDirectory()) continue;
-        const jsonPath = path.join(yearPath, cycleDir.name, 'vouchers.json');
         
         try {
-          const content = await fs.readFile(jsonPath, 'utf-8');
-          const vouchers: VoucherRecord[] = JSON.parse(content);
+          const vouchers = await readAllVouchersInCycle(yearDir.name, cycleDir.name);
           
           const idx = vouchers.findIndex(v => v.tokenJefe === token);
           if (idx >= 0) {
@@ -1012,7 +1142,7 @@ export async function authorizeVoucherByTokenAction(token: string) {
             voucher.autorizadoPorJefe = true;
             vouchers[idx] = voucher;
             
-            await fs.writeFile(jsonPath, JSON.stringify(vouchers, null, 2), 'utf-8');
+            await writeAllVouchersToCycle(yearDir.name, cycleDir.name, vouchers);
             
             return {
               success: true,

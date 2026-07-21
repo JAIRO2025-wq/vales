@@ -40,13 +40,22 @@ function getDisplayName(sucursal: string, role: 'CAJERA' | 'JEFE', firma?: Firma
   return role === 'CAJERA' ? 'Cajera' : 'Jefe';
 }
 
-export function FirmasAutorizadasCard() {
+interface FirmasAutorizadasCardProps {
+  /** Si se proporciona, solo muestra esta sucursal. Si no, muestra todas las de CONFIG.SUCURSALES. */
+  sucursalFilter?: string;
+}
+
+export function FirmasAutorizadasCard({ sucursalFilter }: FirmasAutorizadasCardProps) {
   const { toast } = useToast();
   const [firmasAutorizadas, setFirmasAutorizadas] = useState<Record<string, FirmaAutorizada[]>>({});
   const [isExpanded, setIsExpanded] = useState(true);
   const [loadingFirmas, setLoadingFirmas] = useState(false);
   const lunesActual = getLunesActual();
   const lastLoadedLunes = useRef<string | null>(null);
+
+  const sucursales = sucursalFilter
+    ? [sucursalFilter]
+    : CONFIG.SUCURSALES;
 
   const loadFirmas = async (force = false) => {
     // Cache por lunes: si ya cargamos esta semana, no recargar a menos que sea forzado
@@ -56,7 +65,7 @@ export function FirmasAutorizadasCard() {
     setLoadingFirmas(true);
     try {
       const result: Record<string, FirmaAutorizada[]> = {};
-      for (const s of CONFIG.SUCURSALES) {
+      for (const s of sucursales) {
         const firmas = await getFirmasAutorizadasAction(s);
         if (firmas.length > 0) result[s] = firmas;
       }
@@ -138,7 +147,7 @@ export function FirmasAutorizadasCard() {
             </p>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {CONFIG.SUCURSALES.map((suc) => {
+            {sucursales.map((suc) => {
               const firmas = firmasAutorizadas[suc] || [];
               const cajera = firmas.find(f => f.tipo === 'CAJERA');
               const jefe = firmas.find(f => f.tipo === 'JEFE');
