@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
@@ -110,7 +110,7 @@ import {
 
 const BRANCH = "CARA SUCIA";
 
-export default function CaraSuciaDashboard() {
+function CaraSuciaDashboardInner() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -745,5 +745,13 @@ export default function CaraSuciaDashboard() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function CaraSuciaDashboard() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-muted-foreground">Cargando panel...</div>}>
+      <CaraSuciaDashboardInner />
+    </Suspense>
   );
 }
