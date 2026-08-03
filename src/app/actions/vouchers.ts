@@ -81,7 +81,7 @@ export async function readAllVouchersInCycle(year: string | number, cycleId: str
   const cycleDir = path.join(STORAGE_PATH, String(year), cycleId);
   const allVouchers: VoucherRecord[] = [];
 
-  // Leer de la nueva estructura jerárquica
+  // Leer de la nueva estructura jerárquica (incluye archivo plano en raíz si no hay subdirectorios)
   await scanForVouchers(cycleDir, allVouchers);
 
   // Retrocompatibilidad: si existe el archivo plano antiguo en la raíz del ciclo, también leerlo
@@ -99,7 +99,18 @@ export async function readAllVouchersInCycle(year: string | number, cycleId: str
     }
   } catch { /* no existe archivo plano antiguo */ }
 
-  return allVouchers;
+  // Deduplicación final por ID normalizado.
+  // Previene duplicados cuando coexisten archivo plano + estructura jerárquica
+  // en el mismo ciclo (scanForVouchers lee ambos y pueden solaparse).
+  const seen = new Map<string, VoucherRecord>();
+  for (const v of allVouchers) {
+    const key = v.id.trim().toUpperCase().replace(/[\s_]/g, '-');
+    if (!seen.has(key)) {
+      seen.set(key, v);
+    }
+  }
+
+  return Array.from(seen.values());
 }
 
 /** Escanea recursivamente para recolectar todas las rutas de vouchers.json existentes */
@@ -175,11 +186,10 @@ export async function writeAllVouchersToCycle(year: string | number, cycleId: st
     }
   } catch { /* ciclo no existe */ }
 
-  // Eliminar el archivo plano antiguo si existe (ya migramos a la nueva estructura)
-  try {
-    const oldFlatPath = path.join(cycleDir, 'vouchers.json');
-    await fs.unlink(oldFlatPath);
-  } catch { /* no existe */ }
+  // NO borramos el archivo plano antiguo.
+  // Mantenerlo como respaldo evita pérdida de datos si la migración
+  // a estructura jerárquica falla parcialmente en producción.
+  // scanForVouchers + retrocompatibilidad manejan ambos formatos sin duplicados.
 }
 
 const STORAGE_PATH = path.join(process.cwd(), 'src/data/storage');
