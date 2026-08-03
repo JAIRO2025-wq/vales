@@ -166,9 +166,9 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Sincroniza el voucher subido con la estructura jerárquica de vales
- * ({year}/{ciclo}/{sucursal}/{caja}/vouchers.json)
- * para que checkVoucherStatusAction también lo detecte.
+ * Sincroniza el voucher subido con el vouchers.json de su grupo específico.
+ * Es un cache opcional — la app ahora lee voucher-index.json como fuente de verdad,
+ * así que si esto falla no afecta la visualización de vouchers.
  */
 async function syncToCycleVouchers(
   targetId: string,
@@ -179,10 +179,21 @@ async function syncToCycleVouchers(
   sheet: string | null
 ) {
   try {
-    // Usar los helpers de vouchers.ts para lectura/escritura jerárquica
-    const { readAllVouchersInCycle, writeAllVouchersToCycle } = await import('@/app/actions/vouchers');
+    const sucursal = targetId.split('-')[0].replace(/\s+/g, '-');
+    const caja = normalizeCaja(sheet || '');
 
-    const vouchers = await readAllVouchersInCycle(year, cicloId);
+    // Ruta al vouchers.json específico de este grupo
+    const groupDir = path.join(STORAGE_PATH, year, cicloId, sucursal, caja);
+    const filePath = path.join(groupDir, 'vouchers.json');
+
+    let vouchers: any[] = [];
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      vouchers = JSON.parse(content);
+    } catch {
+      // No existe el archivo, se creará
+      await fs.mkdir(groupDir, { recursive: true });
+    }
 
     const idx = vouchers.findIndex(
       (v: any) => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId
@@ -196,21 +207,22 @@ async function syncToCycleVouchers(
         id: targetId,
         fila: fila || '',
         sheet: sheet || '',
-        fecha: `${year}-01-01`, // fecha placeholder
+        fecha: `${year}-01-01`,
         voucherUrl,
         voucherSubido: true,
         firmado: false,
         timestamp: new Date().toISOString(),
-        sucursal: '',
+        sucursal: sucursal.replace(/-/g, ' '),
         entregado: '',
         rubro: '',
         numVale: '',
         monto: '0',
-      } as any);
+      });
     }
 
-    await writeAllVouchersToCycle(year, cicloId, vouchers);
+    await fs.writeFile(filePath, JSON.stringify(vouchers, null, 2), 'utf-8');
   } catch (e) {
-    console.warn('No se pudo sincronizar con vouchers.json del ciclo:', e);
+    // No es crítico — la app lee de voucher-index.json directamente
+    console.warn('Sync opcional con vouchers.json falló (no crítico):', (e as Error).message);
   }
 }

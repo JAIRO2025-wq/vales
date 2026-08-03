@@ -75,7 +75,7 @@ interface VoucherEntry {
 interface VoucherGroup {
   sucursal: string;
   year: string;
-  month: string;
+  ciclo: string;
   vouchers: VoucherEntry[];
 }
 
@@ -217,10 +217,10 @@ export default function CaraSuciaVouchersPage() {
       ) : (
         <div className="grid gap-4">
           {groups.map(group => (
-            <div key={`${group.sucursal}-${group.year}-${group.month}`}>
+            <div key={`${group.sucursal}-${group.year}-${group.ciclo}`}>
               <h3 className="text-sm font-bold text-muted-foreground mb-3 flex items-center gap-2">
                 <Calendar className="w-4 h-4" />
-                {group.month}/{group.year} · {group.vouchers.length} voucher(s)
+                {group.ciclo} · {group.vouchers.length} voucher(s)
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {group.vouchers.map(v => (

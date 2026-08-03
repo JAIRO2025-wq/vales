@@ -76,7 +76,26 @@ export async function GET(request: NextRequest) {
         });
       }
     } catch {
-      // No existe el índice o el archivo → no hay voucher
+      // No existe el índice — probar estructura antigua
+    }
+
+    // ===== ESTRUCTURA ANTIGUA: vouchers/{year}/{sucursal}/{month}/*_voucher.* =====
+    const oldDir = path.join(STORAGE_PATH, 'vouchers', year, sucursal, month);
+    try {
+      const files = await fs.readdir(oldDir);
+      const match = files.find(f => f.startsWith(targetId + '_voucher'));
+      if (match) {
+        const fileStat = await fs.stat(path.join(oldDir, match));
+        const relativePath = `vouchers/${year}/${sucursal}/${month}/${match}`;
+        const voucherUrl = `/api/imagenes?fecha=${year}-${month}-25&file=${encodeURIComponent(relativePath)}`;
+        return NextResponse.json({
+          voucherSubido: true,
+          voucherUrl,
+          subidoEl: fileStat.mtime.toISOString(),
+        });
+      }
+    } catch {
+      // No existe en estructura antigua
     }
 
     return NextResponse.json({

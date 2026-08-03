@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { normalizeId, formatVoucherForApi, readAllVouchersInCycle } from '@/app/actions/vouchers';
+import { normalizeId, formatVoucherForApi, readAllVouchersInCycle, scanVoucherIndexes } from '@/app/actions/vouchers';
 import { getCycleFromDate } from '@/lib/cycles';
 
 /**
@@ -37,6 +37,16 @@ export async function GET(request: NextRequest) {
       const [year] = cicloParams.split('-');
       try {
         const vouchers = await readAllVouchersInCycle(year, cicloParams);
+        // Merge con voucher-index.json (fuente de verdad para vouchers subidos)
+        const voucherIndexes = await scanVoucherIndexes(year, cicloParams);
+        for (const v of vouchers) {
+          const key = (v.id || '').trim().toUpperCase().replace(/[\s_]/g, '-');
+          const idxData = voucherIndexes.get(key);
+          if (idxData) {
+            if (!v.voucherUrl) v.voucherUrl = idxData.voucherUrl;
+            v.voucherSubido = true;
+          }
+        }
         // Para consultas masivas, NO resolvemos imágenes (solo datos crudos).
         // El que necesite imágenes que llame al endpoint individual con ?id=.
         // Esto evita saturar el servidor leyendo cientos de imágenes del disco.

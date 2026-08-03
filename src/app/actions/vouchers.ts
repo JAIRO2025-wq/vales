@@ -76,6 +76,112 @@ async function scanForVouchers(dir: string, result: VoucherRecord[]) {
   } catch { /* directorio no existe, ignorar */ }
 }
 
+/** Escanea storage/vouchers/{year}/ en busca de voucher-index.json (NUEVA estructura)
+ *  Y también escanea la estructura ANTIGUA (vouchers/{year}/{sucursal}/{month}/*_voucher.*).
+ *  Retorna un mapa: id_normalizado → { voucherUrl, subidoEl }
+ *  Esta es la FUENTE DE VERDAD para saber si un vale tiene voucher subido. */
+export async function scanVoucherIndexes(year: string, cycleId: string): Promise<Map<string, { voucherUrl: string; subidoEl: string }>> {
+  const result = new Map<string, { voucherUrl: string; subidoEl: string }>();
+
+  // ── NUEVA ESTRUCTURA: escanear recursivamente voucher-index.json ──
+  const vouchersRoot = path.join(STORAGE_PATH, 'vouchers', year, cycleId);
+
+  async function walk(dir: string) {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+        } else if (entry.name === 'voucher-index.json') {
+          try {
+            const content = await fs.readFile(fullPath, 'utf-8');
+            const index = JSON.parse(content);
+            for (const [id, data] of Object.entries(index)) {
+              const key = id.trim().toUpperCase().replace(/[\s_]/g, '-');
+              result.set(key, data as any);
+            }
+          } catch { /* archivo corrupto, ignorar */ }
+        }
+      }
+    } catch { /* directorio no existe */ }
+  }
+
+  await walk(vouchersRoot);
+
+  // ── ESTRUCTURA ANTIGUA: vouchers/{year}/{sucursal}/{month}/*_voucher.* ──
+  // Determinar los meses que este ciclo Flynet abarca
+  const [, cicloMonthStr] = cycleId.split('-');
+  const cicloMonth = parseInt(cicloMonthStr, 10);
+  const candidateMonths = new Set<string>();
+  candidateMonths.add(cicloMonthStr); // mes del ciclo (días 20+)
+  const nextMonth = cicloMonth === 12 ? 1 : cicloMonth + 1;
+  candidateMonths.add(String(nextMonth).padStart(2, '0')); // mes siguiente (días 1-19)
+
+  const yearVouchersDir = path.join(STORAGE_PATH, 'vouchers', year);
+  try {
+    const yearEntries = await fs.readdir(yearVouchersDir, { withFileTypes: true });
+    for (const yearEntry of yearEntries) {
+      if (!yearEntry.isDirectory()) continue;
+      // Saltar directorios que son IDs de ciclo (YYYY-MM) — son nueva estructura
+      if (/^\d{4}-\d{2}$/.test(yearEntry.name)) continue;
+
+      const sucursal = yearEntry.name;
+      const sucursalPath = path.join(yearVouchersDir, sucursal);
+
+      for (const month of candidateMonths) {
+        const monthPath = path.join(sucursalPath, month);
+        try {
+          const files = await fs.readdir(monthPath);
+          for (const file of files) {
+            const match = file.match(/^(.+)_voucher\.\w+$/i);
+            if (!match) continue;
+
+            const id = match[1].toUpperCase().replace(/[\s_]/g, '-').replace(/[^A-Z0-9\-]/g, '');
+
+            // Verificar que este archivo realmente pertenece al ciclo (prueba día 15 y 25)
+            const idMonthMatch = id.match(/-(\d{4})-(\d{2})-/);
+            if (idMonthMatch) {
+              const idYear = idMonthMatch[1];
+              const idMonth = idMonthMatch[2];
+              const ref15 = getCycleFromDate(`${idYear}-${idMonth}-15`);
+              const ref25 = getCycleFromDate(`${idYear}-${idMonth}-25`);
+              if (ref15.id !== cycleId && ref25.id !== cycleId) continue;
+            }
+
+            // Si ya existe del nuevo índice, no sobrescribir (el índice es más preciso)
+            const key = id.trim().toUpperCase().replace(/[\s_]/g, '-');
+            if (result.has(key)) continue;
+
+            const fileStat = await fs.stat(path.join(monthPath, file)).catch(() => null);
+            const subidoEl = fileStat?.mtime.toISOString() || '';
+
+            const relativePath = `vouchers/${year}/${sucursal}/${month}/${file}`;
+            const voucherUrl = `/api/imagenes?fecha=${year}-${month}-25&file=${encodeURIComponent(relativePath)}`;
+
+            result.set(key, { voucherUrl, subidoEl });
+          }
+        } catch { /* mes no existe en esta sucursal */ }
+      }
+    }
+  } catch { /* año no existe */ }
+
+  return result;
+}
+
+/** Mezcla los datos de voucher-index.json en un array de VoucherRecord.
+ *  Lee voucherUrl y subidoEl del índice y los aplica si el voucher no los tiene ya. */
+function mergeVoucherIndexes(vouchers: VoucherRecord[], voucherIndexes: Map<string, { voucherUrl: string; subidoEl: string }>) {
+  for (const v of vouchers) {
+    const key = (v.id || '').trim().toUpperCase().replace(/[\s_]/g, '-');
+    const idxData = voucherIndexes.get(key);
+    if (idxData) {
+      if (!v.voucherUrl) v.voucherUrl = idxData.voucherUrl;
+      v.voucherSubido = true;
+    }
+  }
+}
+
 /** Lee TODOS los vouchers de un ciclo, con retrocompatibilidad para la estructura plana antigua */
 export async function readAllVouchersInCycle(year: string | number, cycleId: string): Promise<VoucherRecord[]> {
   const cycleDir = path.join(STORAGE_PATH, String(year), cycleId);
@@ -625,6 +731,10 @@ export async function saveVoucherAction(voucher: VoucherRecord) {
       });
     }
     
+    // Preservar datos de voucher-index.json antes de escribir (self-healing)
+    const saveIdx = await scanVoucherIndexes(yearStr, cycleId);
+    mergeVoucherIndexes(vouchers, saveIdx);
+
     // Escribir en la nueva estructura jerárquica: {year}/{ciclo}/{sucursal}/{caja}/vouchers.json
     await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     
@@ -684,11 +794,15 @@ export async function moveVoucherToCycleAction(
 
     // Remover del origen y escribir
     sourceVouchers.splice(idx, 1);
+    const moveSourceIdx = await scanVoucherIndexes(year, sourceCycle);
+    mergeVoucherIndexes(sourceVouchers, moveSourceIdx);
     await writeAllVouchersToCycle(year, sourceCycle, sourceVouchers);
 
     // Insertar en destino y escribir
     targetVouchers.push(voucher);
     targetVouchers.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+    const moveTargetIdx = await scanVoucherIndexes(year, targetCycle);
+    mergeVoucherIndexes(targetVouchers, moveTargetIdx);
     await writeAllVouchersToCycle(year, targetCycle, targetVouchers);
 
     return { success: true };
@@ -734,6 +848,8 @@ export async function savePdfAction(voucherId: string, fecha: string, numVale: s
     const index = vouchers.findIndex(v => v.id.toUpperCase().replace(/[\s_]/g, '-') === targetId);
     if (index >= 0) {
       vouchers[index].hasPdf = true;
+      const pdfIdx = await scanVoucherIndexes(yearStr, cycleId);
+      mergeVoucherIndexes(vouchers, pdfIdx);
       await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     }
     
@@ -775,6 +891,11 @@ export async function getVouchersByCycleActionFormatted(
   try {
     const year = cycleId.split('-')[0];
     const vouchers = await readAllVouchersInCycle(year, cycleId);
+
+    // Merge con voucher-index.json (fuente de verdad para vouchers subidos)
+    // Esto garantiza que los vouchers se detecten incluso si syncToCycleVouchers falló
+    const voucherIndexes = await scanVoucherIndexes(year, cycleId);
+    mergeVoucherIndexes(vouchers, voucherIndexes);
 
     // Cargar la config UNA SOLA VEZ para todo el lote
     const config = getServerConfig();
@@ -913,6 +1034,8 @@ export async function deleteSignatureAction(id: string, fecha: string) {
       timestamp: new Date().toISOString(),
     };
     
+    const delSigIdx = await scanVoucherIndexes(yearStr, cycleId);
+    mergeVoucherIndexes(vouchers, delSigIdx);
     await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     revalidatePath('/admin');
     return { success: true };
@@ -957,6 +1080,8 @@ export async function deleteComprobanteAction(id: string, fecha: string) {
       timestamp: new Date().toISOString(),
     };
     
+    const delCompIdx = await scanVoucherIndexes(yearStr, cycleId);
+    mergeVoucherIndexes(vouchers, delCompIdx);
     await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     revalidatePath('/admin');
     return { success: true };
@@ -1002,9 +1127,55 @@ export async function deleteVoucherAction(id: string, fecha: string) {
         }
       }
     }
+
+    // Borrar la imagen del voucher bancario (si existe)
+    if (voucher.voucherUrl || (voucher as any).voucherSubido) {
+      const sucursalDir = (voucher.sucursal || 'SIN-SUCURSAL').toUpperCase().replace(/\s+/g, '-');
+      const cajaDir = normalizeCajaFolder(voucher.sheet || 'GENERAL');
+      const vouchersDir = path.join(STORAGE_PATH, 'vouchers', yearStr, cycleId, sucursalDir, cajaDir);
+
+      // Borrar la imagen del voucher
+      try {
+        const files = await fs.readdir(vouchersDir);
+        for (const file of files) {
+          if (file.startsWith(targetId + '_voucher')) {
+            await fs.unlink(path.join(vouchersDir, file));
+          }
+        }
+      } catch { /* directorio no existe */ }
+
+      // Limpiar el voucher-index.json
+      const indexPath = path.join(vouchersDir, 'voucher-index.json');
+      try {
+        const idxContent = await fs.readFile(indexPath, 'utf-8');
+        const idx: Record<string, any> = JSON.parse(idxContent);
+        delete idx[targetId];
+        if (Object.keys(idx).length === 0) {
+          await fs.unlink(indexPath);
+        } else {
+          await fs.writeFile(indexPath, JSON.stringify(idx, null, 2), 'utf-8');
+        }
+      } catch { /* índice no existe */ }
+
+      // Limpiar también la imagen en estructura ANTIGUA (vouchers/{year}/{sucursal}/{month}/)
+      const idMonthMatch = voucher.id.match(/-(\d{4})-(\d{2})-/);
+      if (idMonthMatch) {
+        const oldDir = path.join(STORAGE_PATH, 'vouchers', idMonthMatch[1], sucursalDir, idMonthMatch[2]);
+        try {
+          const oldFiles = await fs.readdir(oldDir);
+          for (const f of oldFiles) {
+            if (f.startsWith(targetId + '_voucher')) {
+              await fs.unlink(path.join(oldDir, f));
+            }
+          }
+        } catch { /* estructura antigua no existe */ }
+      }
+    }
     
     // Eliminar el registro
     vouchers.splice(index, 1);
+    const delIdx = await scanVoucherIndexes(yearStr, cycleId);
+    mergeVoucherIndexes(vouchers, delIdx);
     await writeAllVouchersToCycle(yearStr, cycleId, vouchers);
     
     revalidatePath('/admin');
@@ -1152,6 +1323,8 @@ export async function authorizeVoucherByTokenAction(token: string) {
             voucher.autorizadoPorJefe = true;
             vouchers[idx] = voucher;
             
+            const authIdx = await scanVoucherIndexes(yearDir.name, cycleDir.name);
+            mergeVoucherIndexes(vouchers, authIdx);
             await writeAllVouchersToCycle(yearDir.name, cycleDir.name, vouchers);
             
             return {

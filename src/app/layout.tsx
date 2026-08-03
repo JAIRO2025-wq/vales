@@ -48,7 +48,10 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: `
-              if ('serviceWorker' in navigator) {
+              // Solo registrar el SW en producción.
+              // En desarrollo, Next.js recompila sw.js en cada cambio y provoca
+              // un loop de "nueva versión → recargar" (peor con "Update on reload").
+              if (${process.env.NODE_ENV === 'production'} && 'serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
                   navigator.serviceWorker.register('/sw.js').then(
                     function(registration) {
@@ -59,9 +62,12 @@ export default function RootLayout({
                         if (newWorker) {
                           newWorker.addEventListener('statechange', function() {
                             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                              console.log('Nueva versión disponible. Recargando...');
-                              // Recargar la página para obtener el nuevo HTML con los chunks actualizados
-                              window.location.reload();
+                              // Guard: recargar como máximo una vez por sesión
+                              if (!sessionStorage.getItem('sw-reloaded')) {
+                                sessionStorage.setItem('sw-reloaded', '1');
+                                console.log('Nueva versión disponible. Recargando...');
+                                window.location.reload();
+                              }
                             }
                           });
                         }
@@ -76,8 +82,9 @@ export default function RootLayout({
                 // Recargar cuando el SW tome el control (tras skipWaiting + claim)
                 var refreshing = false;
                 navigator.serviceWorker.addEventListener('controllerchange', function() {
-                  if (!refreshing) {
+                  if (!refreshing && !sessionStorage.getItem('sw-reloaded')) {
                     refreshing = true;
+                    sessionStorage.setItem('sw-reloaded', '1');
                     window.location.reload();
                   }
                 });

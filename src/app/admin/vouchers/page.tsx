@@ -32,20 +32,20 @@ interface VoucherEntry {
 interface VoucherGroup {
   sucursal: string;
   year: string;
-  month: string;
+  ciclo: string;
   vouchers: VoucherEntry[];
 }
 
 interface SucursalGroup {
   sucursal: string;
-  vouchers: (VoucherEntry & { year: string; month: string })[];
+  vouchers: (VoucherEntry & { year: string; ciclo: string })[];
 }
 
 export default function VouchersAdminPage() {
   const { toast } = useToast();
   const [groups, setGroups] = useState<VoucherGroup[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedVoucher, setSelectedVoucher] = useState<(VoucherEntry & { sucursal: string; year: string; month: string }) | null>(null);
+  const [selectedVoucher, setSelectedVoucher] = useState<(VoucherEntry & { sucursal: string; year: string; ciclo: string }) | null>(null);
   const [mounted, setMounted] = useState(false);
   const [expandedSucursales, setExpandedSucursales] = useState<Set<string>>(new Set());
   const [voucherPage, setVoucherPage] = useState(1);
@@ -232,14 +232,13 @@ export default function VouchersAdminPage() {
   };
 
   const allVouchers = groups.flatMap((g) =>
-    g.vouchers.map((v) => ({ ...v, sucursal: g.sucursal, year: g.year, month: g.month }))
+    g.vouchers.map((v) => ({ ...v, sucursal: g.sucursal, year: g.year, ciclo: g.ciclo }))
   );
 
   // Filtrar vouchers por el ciclo seleccionado (mismo formato YYYY-MM que en /admin)
   const filteredVouchers = useMemo(() => {
     if (!selectedCycle) return allVouchers;
-    const [cycleYear, cycleMonth] = selectedCycle.split('-');
-    return allVouchers.filter((v) => v.year === cycleYear && v.month === cycleMonth);
+    return allVouchers.filter((v) => v.ciclo === selectedCycle);
   }, [allVouchers, selectedCycle]);
 
   const sucursalGroups: SucursalGroup[] = (() => {
